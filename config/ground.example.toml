@@ -1,0 +1,27 @@
+# 示例配置，不含密钥，也不会被程序自动视为正式现场配置。
+
+[application]
+role = "ground"
+language = "zh-CN"
+
+[network]
+listen_host = "0.0.0.0"
+listen_port = 8765
+expected_air_device_id = "CHANGE_ME"
+heartbeat_timeout_s = 5.0
+
+[storage]
+run_root = "./runs/ground"
+flush_every_traces = 1
+retain_partial_files = true
+
+[ui]
+target_width_px = 1920
+target_height_px = 1080
+map_default_ratio = 0.32
+map_minimum_width_px = 400
+
+[map]
+mode = "offline_or_blank"
+cache_root = "./map_cache"
+online_access_enabled = false

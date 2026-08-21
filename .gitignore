@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environments and dependencies
+.venv/
+venv/
+.vendor/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Runtime configuration and secrets
+config/air.toml
+config/ground.toml
+*.key
+*.pem
+.env
+.env.*
+
+# Field data and runtime state
+data/
+runs/
+runtime/
+outbox/
+map_cache/
+*.rcscan
+*.partial.rcscan
+*.rcal
+*.rcbg
+*.h5
+*.hdf5
+*.sqlite
+*.sqlite3
+*.db
+*.nmea
+
+# Generated diagnostics and reports
+logs/
+reports/generated/
+docs/reports/generated/
+*.log

@@ -1,0 +1,26 @@
+# 示例配置，不含密钥，也不会被程序自动视为正式现场配置。
+
+[application]
+role = "air"
+device_id = "CHANGE_ME"
+
+[network]
+ground_host = "192.168.144.111"
+ground_port = 8765
+connect_timeout_s = 5.0
+heartbeat_interval_s = 1.0
+
+[storage]
+run_root = "./runs/air"
+outbox_root = "./outbox"
+flush_every_traces = 1
+retain_until_ground_verified = true
+
+[librevna]
+backend = "disabled"
+# 真机参数必须由任务配置下发；初始化配置不得自动连接硬件。
+
+[gnss]
+port = "CHANGE_ME"
+baudrate = 115200
+stale_after_s = 2.0

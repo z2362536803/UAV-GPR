@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uav-gpr"
+version = "0.1.0.dev0"
+description = "Ground-centric UAV ground-penetrating radar acquisition and visualization software"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Proprietary" }
+authors = [{ name = "UAV-GPR Team" }]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+  "h5py>=3.11,<4",
+  "numpy>=1.26,<3",
+  "pyqtgraph>=0.13.7,<0.15",
+  "pyserial>=3.5,<4",
+  "PySide6>=6.7,<7",
+  "pyusb>=1.2.1,<2",
+  "scipy>=1.12,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.10,<2",
+  "pytest>=8.2,<9",
+  "pytest-cov>=5,<7",
+  "pytest-qt>=4.4,<5",
+  "ruff>=0.5,<1",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+uav_gpr = ["py.typed"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "hardware: requires physical LibreVNA, GNSS, HM30, or other field hardware",
+  "slow: long-running performance or endurance test",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["uav_gpr"]
+mypy_path = "src"
