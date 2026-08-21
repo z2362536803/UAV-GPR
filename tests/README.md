@@ -8,3 +8,5 @@
 - `fixtures/`：小型、匿名、可审计的合成数据；不得放现场实测数据。
 
 测试分层、标记和验收矩阵见 `docs/TESTING.md`。
+
+硬件测试（`hardware` 目录）默认被跳过，需要双重 opt-in：`--hardware` 命令行参数且环境变量 `UAV_GPR_HARDWARE_OPTIN=1`，见 `docs/TESTING.md` 2.1 节。共享 fixture（随机 seed、`scratch_dir`、`virtual_clock`、Qt offscreen）在 `tests/conftest.py`。

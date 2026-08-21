@@ -50,8 +50,12 @@ uav_gpr = ["py.typed"]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 markers = [
-  "hardware: requires physical LibreVNA, GNSS, HM30, or other field hardware",
+  "hardware: requires physical LibreVNA, GNSS, HM30, or other field hardware (double opt-in: --hardware + UAV_GPR_HARDWARE_OPTIN=1)",
   "slow: long-running performance or endurance test",
+  "unit: pure domain model, algorithm, parser or state machine test",
+  "integration: multi-layer composition, reconnect or crash-recovery flow",
+  "contract: file format, protocol or golden-sample compatibility",
+  "ui: Qt widget test; runs with the offscreen platform",
 ]
 
 [tool.ruff]

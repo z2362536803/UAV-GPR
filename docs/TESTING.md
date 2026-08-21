@@ -26,6 +26,47 @@ python -m mypy src
 
 硬件测试必须检查明确的设备标识并要求操作者 opt-in，不得在普通开发机上自动连真机。
 
+## 2.1 本地一键验证（Windows）
+
+全新环境：
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+powershell -ExecutionPolicy Bypass -File scripts\verify.ps1
+```
+
+`scripts\verify.ps1` 依次运行并**失败即停**（第一个失败步骤的退出码被原样返回）：
+
+1. 非硬件 pytest（`-m "not hardware and not slow"`）；
+2. Ruff（`ruff check .`）；
+3. mypy（`mypy src`）；
+4. 包导入检查（`import uav_gpr` 及核心分层子包）。
+
+等价的纯 Python 入口是 `python tools\quality\verify.py`。
+
+### 默认测试不得触碰的设施
+
+- 不枚举或连接 USB，不打开真实串口，不访问外网；
+- 不修改两个参考项目（`E:\钢筋仪软件开发`、`E:\UVA_GPR_system`）；
+- 测试只使用合成数据与临时目录；真实设备路径必须标 `hardware`。
+
+### 硬件双重 opt-in
+
+硬件测试需要**同时**满足两个条件才会执行：
+
+1. 命令行显式传 `--hardware`（或 `-m hardware`）；
+2. 环境变量 `UAV_GPR_HARDWARE_OPTIN=1`。
+
+默认（两者缺一）情况下硬件测试在收集阶段被跳过。测试内部还应根据 `UAV_GPR_DEVICE_ID` 等设备标识做进一步自检。
+
+### 环境与随机性
+
+- `tests/conftest.py` 在导入时设置 `QT_QPA_PLATFORM=offscreen` 与 `TZ=UTC`；
+- 每个测试开始前用 `--seed`（默认 0）重置 `random` 与 `numpy.random`；
+- 共享临时目录 fixture：`scratch_dir`；
+- 虚拟时钟 fixture：`virtual_clock`（UTC + 单调 ns，可推进）。
+
 ## 3. 必测契约
 
 ### Core
