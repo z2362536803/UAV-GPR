@@ -27,6 +27,7 @@
 | [TESTING.md](TESTING.md) | 测试分层、矩阵和硬件验收 |
 | [DEPLOYMENT_HM30.md](DEPLOYMENT_HM30.md) | HM30 网络、供电和干扰验证计划 |
 | [REFERENCE_MIGRATION.md](REFERENCE_MIGRATION.md) | 两个参考项目的迁移白名单与审计方法 |
+| [reference-baselines/](reference-baselines/README.md) | 参考项目只读基线清单、生成工具与格式说明 |
 | [ROADMAP.md](ROADMAP.md) | 阶段顺序、门禁和里程碑，不是具体 Issue 清单 |
 | [issues/README.md](issues/README.md) | 60 个完整 Issue、依赖顺序、验收标准与 DeepSeek Harness 提示词 |
 

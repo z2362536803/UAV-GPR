@@ -13,6 +13,7 @@
 
 - 不用“某目录当前最新版”作为可复现来源；
 - 每次任务开始冻结 `git status`、branch、HEAD 和所有实际参考文件 SHA256；
+- 当前冻结基线清单位于 `docs/reference-baselines/`，由 `tools/migration/reference_manifest.py` 只读生成（见该目录 README）；
 - 未提交文件以逐文件哈希记录，必要时创建只读快照；
 - 文档陈述必须与实际代码/测试交叉验证；
 - 本项目绝不修改两个参考目录。
