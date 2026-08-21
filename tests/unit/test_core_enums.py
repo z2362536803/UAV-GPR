@@ -6,11 +6,16 @@ import pytest
 
 from uav_gpr.core import (
     EndpointRole,
+    GnssFixQuality,
+    GnssMatchMethod,
     GnssStatus,
+    GnssUnavailableReason,
     LogicalPolarization,
     MissionTerminalState,
     SParameter,
     StableStrEnum,
+    TraceQualityReason,
+    TraceQualityStatus,
 )
 
 
@@ -28,6 +33,30 @@ def test_enum_values_are_stable_lowercase_strings() -> None:
             "stale",
             "invalid",
         },
+        GnssFixQuality: {
+            "invalid",
+            "gps_fix",
+            "dgps",
+            "rtk_fixed",
+            "rtk_float",
+            "estimated",
+            "simulated",
+        },
+        GnssMatchMethod: {"nearest_midpoint"},
+        GnssUnavailableReason: {
+            "no_fix",
+            "stale",
+            "invalid",
+            "clock_unavailable",
+            "out_of_range",
+        },
+        TraceQualityStatus: {"nominal", "degraded", "invalid"},
+        TraceQualityReason: {
+            "gnss_missing",
+            "device_status",
+            "timing_error",
+            "unknown",
+        },
     }
     for enum_type, values in expected.items():
         assert isinstance(enum_type, type) and issubclass(enum_type, StableStrEnum)
@@ -44,6 +73,11 @@ def test_from_value_round_trip_for_every_member() -> None:
         LogicalPolarization,
         MissionTerminalState,
         GnssStatus,
+        GnssFixQuality,
+        GnssMatchMethod,
+        GnssUnavailableReason,
+        TraceQualityStatus,
+        TraceQualityReason,
     ):
         for member in enum_type:
             assert enum_type.from_value(member.value) is member

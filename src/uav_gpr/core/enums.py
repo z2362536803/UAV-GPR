@@ -77,3 +77,48 @@ class GnssStatus(StableStrEnum):
     VALID = "valid"
     STALE = "stale"
     INVALID = "invalid"
+
+
+class GnssFixQuality(StableStrEnum):
+    """Fix quality as reported by NMEA GGA (semantic, not the raw integer)."""
+
+    INVALID = "invalid"
+    GPS_FIX = "gps_fix"
+    DGPS = "dgps"
+    RTK_FIXED = "rtk_fixed"
+    RTK_FLOAT = "rtk_float"
+    ESTIMATED = "estimated"
+    SIMULATED = "simulated"
+
+
+class GnssMatchMethod(StableStrEnum):
+    """How a trace was matched to a GNSS fix."""
+
+    NEAREST_MIDPOINT = "nearest_midpoint"
+
+
+class GnssUnavailableReason(StableStrEnum):
+    """Structured reason why a trace has no usable GNSS position."""
+
+    NO_FIX = "no_fix"
+    STALE = "stale"
+    INVALID = "invalid"
+    CLOCK_UNAVAILABLE = "clock_unavailable"
+    OUT_OF_RANGE = "out_of_range"
+
+
+class TraceQualityStatus(StableStrEnum):
+    """Trace-level data quality summary state."""
+
+    NOMINAL = "nominal"
+    DEGRADED = "degraded"
+    INVALID = "invalid"
+
+
+class TraceQualityReason(StableStrEnum):
+    """Trace-level quality reasons (structural, not display text)."""
+
+    GNSS_MISSING = "gnss_missing"
+    DEVICE_STATUS = "device_status"
+    TIMING_ERROR = "timing_error"
+    UNKNOWN = "unknown"

@@ -3,14 +3,20 @@
 from uav_gpr.core.channels import ChannelSpec
 from uav_gpr.core.enums import (
     EndpointRole,
+    GnssFixQuality,
+    GnssMatchMethod,
     GnssStatus,
+    GnssUnavailableReason,
     LogicalPolarization,
     MissionTerminalState,
     SParameter,
     StableStrEnum,
+    TraceQualityReason,
+    TraceQualityStatus,
 )
 from uav_gpr.core.errors import DomainError, ErrorCode
 from uav_gpr.core.frequency import FrequencyScan, FrequencySweep
+from uav_gpr.core.gnss import GnssFix, GnssMatch
 from uav_gpr.core.identifiers import (
     AirFileId,
     BackgroundReferenceId,
@@ -21,6 +27,7 @@ from uav_gpr.core.identifiers import (
     MissionId,
     TraceUid,
 )
+from uav_gpr.core.metadata import TraceMetadata
 from uav_gpr.core.timeutil import (
     Clock,
     ManualClock,
@@ -45,7 +52,12 @@ __all__ = [
     "ErrorCode",
     "FrequencyScan",
     "FrequencySweep",
+    "GnssFix",
+    "GnssFixQuality",
+    "GnssMatch",
+    "GnssMatchMethod",
     "GnssStatus",
+    "GnssUnavailableReason",
     "GroundFileId",
     "LogicalPolarization",
     "ManualClock",
@@ -55,6 +67,9 @@ __all__ = [
     "SParameter",
     "StableStrEnum",
     "SystemClock",
+    "TraceMetadata",
+    "TraceQualityReason",
+    "TraceQualityStatus",
     "TraceUid",
     "ensure_utc",
     "from_utc_iso",
