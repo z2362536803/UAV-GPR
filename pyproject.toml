@@ -67,7 +67,9 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "B", "UP", "RUF"]
 
 [tool.mypy]
-python_version = "3.11"
+# Development interpreter is Python 3.12 (see scripts\verify.ps1 and docs/TESTING.md);
+# numpy>=2.5 type stubs use PEP 695 syntax, which requires a 3.12 mypy target.
+python_version = "3.12"
 strict = true
 packages = ["uav_gpr"]
 mypy_path = "src"

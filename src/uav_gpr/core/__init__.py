@@ -1,5 +1,6 @@
 """UAV-GPR shared core: identifiers, stable enums, structured errors, time."""
 
+from uav_gpr.core.channels import ChannelSpec
 from uav_gpr.core.enums import (
     EndpointRole,
     GnssStatus,
@@ -9,6 +10,7 @@ from uav_gpr.core.enums import (
     StableStrEnum,
 )
 from uav_gpr.core.errors import DomainError, ErrorCode
+from uav_gpr.core.frequency import FrequencyScan, FrequencySweep
 from uav_gpr.core.identifiers import (
     AirFileId,
     BackgroundReferenceId,
@@ -34,12 +36,15 @@ __all__ = [
     "AirFileId",
     "BackgroundReferenceId",
     "CalibrationProfileId",
+    "ChannelSpec",
     "Clock",
     "CommandId",
     "DeviceId",
     "DomainError",
     "EndpointRole",
     "ErrorCode",
+    "FrequencyScan",
+    "FrequencySweep",
     "GnssStatus",
     "GroundFileId",
     "LogicalPolarization",
