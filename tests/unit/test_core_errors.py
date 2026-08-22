@@ -72,3 +72,50 @@ def test_equality_with_other_types_is_false() -> None:
     error = DomainError(ErrorCode.NAIVE_DATETIME, "naive datetime")
     assert error != "naive datetime"
     assert error != DomainError(ErrorCode.INVALID_ARGUMENT, "naive datetime")
+
+
+def test_context_is_deep_frozen_against_original_mutation() -> None:
+    nested_list = [1, 2]
+    nested_dict = {"trace_index": 3}
+    error = DomainError(
+        ErrorCode.SHAPE_MISMATCH,
+        "nested context",
+        {"list": nested_list, "dict": nested_dict},
+    )
+    nested_list.append(999)
+    nested_dict["trace_index"] = 999
+    assert error.context["list"] == [1, 2]
+    assert error.context["dict"] == {"trace_index": 3}
+
+
+def test_context_property_returns_independent_snapshot() -> None:
+    error = DomainError(
+        ErrorCode.INVALID_ARGUMENT, "snapshot", {"nested": [1, {"a": 2}]}
+    )
+    snapshot = error.context
+    snapshot["nested"].append(999)  # type: ignore[union-attr]
+    snapshot["nested"][1]["a"] = 999  # type: ignore[index]
+    assert error.context["nested"] == [1, {"a": 2}]
+    assert error.to_dict()["context"]["nested"] == [1, {"a": 2}]
+
+
+def test_to_dict_returns_independent_json_safe_data() -> None:
+    error = DomainError(
+        ErrorCode.GNSS_UNAVAILABLE, "no fix", {"rows": [1, 2, 3]}
+    )
+    first = error.to_dict()
+    second = error.to_dict()
+    first["context"]["rows"].append(999)
+    assert second["context"]["rows"] == [1, 2, 3]
+    assert error.context["rows"] == [1, 2, 3]
+
+
+def test_context_equality_and_round_trip_still_hold_for_nested_values() -> None:
+    original = DomainError(
+        ErrorCode.SHAPE_MISMATCH,
+        "nested round trip",
+        {"a": [1, {"b": [True, None, "x"]}]},
+    )
+    restored = DomainError.from_dict(original.to_dict())
+    assert restored == original
+    assert restored.to_dict() == original.to_dict()

@@ -39,6 +39,7 @@ class ErrorCode(StrEnum):
     GNSS_UNAVAILABLE = "gnss_unavailable"
     UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
     UNSUPPORTED_PROTOCOL_VERSION = "unsupported_protocol_version"
+    GNSS_MIDPOINT_MISMATCH = "gnss_midpoint_mismatch"
 
 
 def _require_json_safe(value: Any, path: str = "$") -> None:
@@ -65,6 +66,19 @@ def _require_json_safe(value: Any, path: str = "$") -> None:
     )
 
 
+def _deep_copy_json(value: Any) -> Any:
+    """Recursively copy a JSON-safe value so no caller reference is shared."""
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, list):
+        return [_deep_copy_json(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _deep_copy_json(item) for key, item in value.items()}
+    raise TypeError(
+        f"context value is not JSON safe: {type(value).__name__}"
+    )
+
+
 class DomainError(Exception):
     """A structured domain error with a stable code, safe message and context."""
 
@@ -84,18 +98,27 @@ class DomainError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
-        self._context: Mapping[str, JsonValue] = MappingProxyType(dict(context or {}))
+        # Deep copy on construction: later mutation of the caller's input
+        # (including nested lists/dicts) can never change this error.
+        self._context: Mapping[str, JsonValue] = MappingProxyType(
+            _deep_copy_json(dict(context or {}))
+        )
 
     @property
     def context(self) -> Mapping[str, JsonValue]:
-        """Read-only structured context (JSON-safe values)."""
-        return self._context
+        """Independent, read-only snapshot of the structured context.
+
+        Each access deep-copies the stored context, so mutating a returned
+        nested list/dict cannot reach the error's internal state.
+        """
+        return MappingProxyType(_deep_copy_json(dict(self._context)))
 
     def to_dict(self) -> dict[str, Any]:
+        """Independent, plain JSON-safe data (nested values are copied)."""
         return {
             "code": self.code.value,
             "message": self.message,
-            "context": dict(self._context),
+            "context": _deep_copy_json(dict(self._context)),
         }
 
     @classmethod
