@@ -1,10 +1,13 @@
 """UAV-GPR shared core: identifiers, stable enums, structured errors, time."""
 
 from uav_gpr.core.channels import ChannelSpec
+from uav_gpr.core.config import ConfigDiff, ConfigFieldDiff, MissionConfig
 from uav_gpr.core.enums import (
+    AcquisitionMode,
     EndpointRole,
     GnssFixQuality,
     GnssMatchMethod,
+    GnssNoFixPolicy,
     GnssStatus,
     GnssUnavailableReason,
     LogicalPolarization,
@@ -40,12 +43,15 @@ from uav_gpr.core.timeutil import (
 )
 
 __all__ = [
+    "AcquisitionMode",
     "AirFileId",
     "BackgroundReferenceId",
     "CalibrationProfileId",
     "ChannelSpec",
     "Clock",
     "CommandId",
+    "ConfigDiff",
+    "ConfigFieldDiff",
     "DeviceId",
     "DomainError",
     "EndpointRole",
@@ -56,11 +62,13 @@ __all__ = [
     "GnssFixQuality",
     "GnssMatch",
     "GnssMatchMethod",
+    "GnssNoFixPolicy",
     "GnssStatus",
     "GnssUnavailableReason",
     "GroundFileId",
     "LogicalPolarization",
     "ManualClock",
+    "MissionConfig",
     "MissionId",
     "MissionTerminalState",
     "MonotonicNs",

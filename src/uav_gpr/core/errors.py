@@ -40,6 +40,8 @@ class ErrorCode(StrEnum):
     UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
     UNSUPPORTED_PROTOCOL_VERSION = "unsupported_protocol_version"
     GNSS_MIDPOINT_MISMATCH = "gnss_midpoint_mismatch"
+    NON_UNIFORM_AXIS = "non_uniform_axis"
+    OUT_OF_RANGE = "out_of_range"
 
 
 def _require_json_safe(value: Any, path: str = "$") -> None:

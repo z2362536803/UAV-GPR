@@ -128,3 +128,26 @@ class TraceQualityReason(StableStrEnum):
     GNSS_NO_FIX = "gnss_no_fix"
     GNSS_STALE = "gnss_stale"
     GNSS_INVALID = "gnss_invalid"
+
+
+class AcquisitionMode(StableStrEnum):
+    """Mission acquisition mode: a fixed planned trace count or continuous.
+
+    ``fixed_count`` requires ``planned_trace_count``; ``continuous`` requires
+    it to be ``None`` (the mission runs until explicitly stopped).
+    """
+
+    FIXED_COUNT = "fixed_count"
+    CONTINUOUS = "continuous"
+
+
+class GnssNoFixPolicy(StableStrEnum):
+    """Mission policy when no usable GNSS fix is available for a trace.
+
+    - ``record_without_position``: the trace is still recorded; its position
+      stays explicitly empty with a structured reason (never a fabricated 0/0).
+    - ``abort_task``: the mission fails closed and stops.
+    """
+
+    RECORD_WITHOUT_POSITION = "record_without_position"
+    ABORT_TASK = "abort_task"
