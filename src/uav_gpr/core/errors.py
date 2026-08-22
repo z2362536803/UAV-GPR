@@ -42,6 +42,7 @@ class ErrorCode(StrEnum):
     GNSS_MIDPOINT_MISMATCH = "gnss_midpoint_mismatch"
     NON_UNIFORM_AXIS = "non_uniform_axis"
     OUT_OF_RANGE = "out_of_range"
+    PROCESSING_DOMAIN_MISMATCH = "processing_domain_mismatch"
 
 
 def _require_json_safe(value: Any, path: str = "$") -> None:

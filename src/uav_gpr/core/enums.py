@@ -151,3 +151,31 @@ class GnssNoFixPolicy(StableStrEnum):
 
     RECORD_WITHOUT_POSITION = "record_without_position"
     ABORT_TASK = "abort_task"
+
+
+class DataDomain(StableStrEnum):
+    """Immutable data-domain identifiers for processing provenance.
+
+    Frequency domains cover ``frequency_raw`` and every derived frequency
+    representation; time domains identify ``time_base`` (IFFT output) and
+    ``time_processed`` (after time-domain stages).  A ``ProcessingRecord``
+    links input and output domains; a ``TimeDomainScan`` must end its history
+    in the domain matching its ``kind``.
+    """
+
+    FREQUENCY_RAW = "frequency_raw"
+    FREQUENCY_CALIBRATED = "frequency_calibrated"
+    FREQUENCY_BACKGROUND_APPLIED = "frequency_background_applied"
+    TIME_BASE = "time_base"
+    TIME_PROCESSED = "time_processed"
+
+
+class TimeDomainKind(StableStrEnum):
+    """Time-domain scan kind: calibrated base vs processed representation.
+
+    ``time_base`` is the IFFT output; ``time_processed`` exists only when a
+    time-domain stage produced it and requires a matching provenance record.
+    """
+
+    TIME_BASE = "time_base"
+    TIME_PROCESSED = "time_processed"
