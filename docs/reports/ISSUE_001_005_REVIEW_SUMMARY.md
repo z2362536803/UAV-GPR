@@ -1,7 +1,7 @@
 # ISSUE-001～005 审查与修复总结
 
-版本：1.0  
-日期：2026-08-22  
+版本：1.0
+日期：2026-08-22
 结论：`PASS`，实现与复审修复已进入 `main` 并推送至 `origin/main`。
 
 ## 1. 范围与基线
@@ -62,4 +62,3 @@
 - `FrequencyScan` 的 `None` 占位条目不参与 UID、顺序和任务一致性校验；其持久化语义留给后续 storage Issue。
 - `docs/issues/M01_GOVERNANCE_CORE.md` 仍是规划源文件，ISSUE 状态文字仍为 `Planned`；本总结记录实际交付证据，但不替代正式状态管理。
 - 开始新 Issue 前仍须按 `AGENTS.md` 和 `docs/ISSUE_REVIEW_STANDARD.md` 重新识别基线、依赖、范围和验收标准。
-
