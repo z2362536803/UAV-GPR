@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import random
 import subprocess
 import sys
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,6 +16,8 @@ from conftest import VirtualClock
 VERIFY_PATH = (
     Path(__file__).resolve().parents[2] / "tools" / "quality" / "verify.py"
 )
+
+HARDWARE_OPTIN_ENV = "UAV_GPR_HARDWARE_OPTIN"
 
 
 def _load_verify() -> object:
@@ -25,7 +29,23 @@ def _load_verify() -> object:
     return module
 
 
-def _run(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    args: list[str],
+    cwd: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+    remove_env: Sequence[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess with a controlled environment.
+
+    ``remove_env`` deletes variables from the child environment so a test can
+    prove a property regardless of what the *parent* process happens to have
+    set (e.g. ``UAV_GPR_HARDWARE_OPTIN=1`` exported in the developer shell).
+    """
+    env = os.environ.copy()
+    for name in remove_env or ():
+        env.pop(name, None)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         args,
         cwd=cwd,
@@ -33,6 +53,7 @@ def _run(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProces
         text=True,
         encoding="utf-8",
         timeout=120,
+        env=env,
     )
 
 
@@ -116,11 +137,79 @@ def test_hardware_double_optin_runs_marked_test() -> None:
             "no:cacheprovider",
             "--hardware",
         ],
+        # Regression guard: strip the opt-in variable explicitly so this test
+        # proves "flag alone is not enough" even when the *parent* process
+        # (developer shell, CI wrapper) already exported the variable.
+        remove_env=[HARDWARE_OPTIN_ENV],
     )
     # The env opt-in is missing, so even with --hardware the test must skip.
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 skipped" in result.stdout
     assert "HARDWARE_SENTINEL_RAN" not in result.stdout
+
+
+def test_parent_optin_env_does_not_execute_hardware_dir() -> None:
+    """Parent env has the opt-in set, outer run passes no --hardware flag.
+
+    Non-hardware tests start nested pytest subprocesses; none of them may
+    execute ``tests/hardware`` just because the variable is inherited.  A
+    small non-hardware module is selected so the probe stays fast and cannot
+    recurse into the quality-gate tests' own subprocesses.
+    """
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/unit/test_no_external_access.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        extra_env={HARDWARE_OPTIN_ENV: "1"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "3 passed" in result.stdout
+    assert "HARDWARE_SENTINEL_RAN" not in result.stdout
+
+
+def test_hardware_env_alone_is_not_authorization() -> None:
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/hardware",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        ],
+        extra_env={HARDWARE_OPTIN_ENV: "1"},
+    )
+    # Env alone (no --hardware) must still skip: env is not an authorization.
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 skipped" in result.stdout
+    assert "HARDWARE_SENTINEL_RAN" not in result.stdout
+
+
+def test_hardware_runs_only_with_both_authorizations() -> None:
+    result = _run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/hardware",
+            "-q",
+            "-s",
+            "-p",
+            "no:cacheprovider",
+            "--hardware",
+        ],
+        extra_env={HARDWARE_OPTIN_ENV: "1"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
+    assert "HARDWARE_SENTINEL_RAN" in result.stdout
 
 
 def test_random_seed_is_deterministic() -> None:

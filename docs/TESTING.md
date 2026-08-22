@@ -1,7 +1,7 @@
 # 测试策略
 
-版本：0.1
-状态：项目门禁，测试尚未创建
+版本：0.2
+状态：本地质量门禁已建立；`tests/unit`（含质量门禁自检）已有自动化测试并在门禁中运行；`tests/integration`、`tests/contract`、`tests/ui` 尚无测试，随后续 Issue 建立；`tests/hardware` 仅有硬件授权 sentinel（默认跳过/双重 opt-in），尚无真实硬件能力测试
 
 ## 1. 测试分层
 
@@ -55,10 +55,20 @@ powershell -ExecutionPolicy Bypass -File scripts\verify.ps1
 
 硬件测试需要**同时**满足两个条件才会执行：
 
-1. 命令行显式传 `--hardware`（或 `-m hardware`）；
-2. 环境变量 `UAV_GPR_HARDWARE_OPTIN=1`。
+1. 命令行显式传 `--hardware`（唯一 CLI 授权开关）；
+2. 环境变量 `UAV_GPR_HARDWARE_OPTIN=1`（唯一环境授权开关）。
 
-默认（两者缺一）情况下硬件测试在收集阶段被跳过。测试内部还应根据 `UAV_GPR_DEVICE_ID` 等设备标识做进一步自检。
+`-m hardware` 只负责**选择**硬件测试项，不构成硬件授权；单独使用
+`-m hardware`、单独使用 `--hardware` 或单独设置
+`UAV_GPR_HARDWARE_OPTIN=1` 三种情况都必须在收集阶段跳过硬件测试。两项同时
+存在时硬件测试才会运行（由 `tests/unit/test_quality_gates.py` 的哨兵测试证明）。
+
+默认（两者缺一）情况下硬件测试在收集阶段被跳过。测试内部还应根据
+`UAV_GPR_DEVICE_ID` 等设备标识做进一步自检。
+
+默认测试（非硬件）不导入 `serial`/`usb`/`socket`/网络客户端，也不引用两个
+参考项目路径；该约束由 `tests/unit/test_no_external_access.py` 的 AST/文本守卫
+与硬件哨兵跳过测试共同保证。
 
 ### 环境与随机性
 
