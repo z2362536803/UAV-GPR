@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -314,3 +315,75 @@ def test_sha256_matches_known_vector(tool: Any, tmp_path: Path) -> None:
     assert manifest.repositories[0].entries[0].sha256 == (
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     )
+
+
+def test_chinese_untracked_filename_is_recorded_losslessly(tool: Any, tmp_path: Path) -> None:
+    repo = _make_repo(
+        tmp_path,
+        {
+            "src/中文模块.py": "value = 1\n",
+            "src/ascii.py": "value = 2\n",
+        },
+    )
+    # git records non-ASCII paths either as raw UTF-8 (core.quotePath=false)
+    # or as its canonical octal escape (default).  Both forms are lossless;
+    # the tool must never produce U+FFFD.
+    untracked = repo / "未跟踪文件.py"
+    untracked.write_text("data\n", encoding="utf-8")
+    spec_path = _write_spec(
+        tmp_path,
+        repo,
+        [
+            {"role": "core", "path": "src/中文模块.py"},
+            {"role": "core", "path": "src/ascii.py"},
+        ],
+    )
+    manifest = tool.collect_manifest(spec_path)
+    repo_manifest = manifest.repositories[0]
+    assert repo_manifest.dirty is True
+    # "未跟踪文件.py" is either literal UTF-8 or the octal escape "\346\234\252".
+    assert any(
+        ("未跟踪文件.py" in line or "\\346\\234\\252" in line)
+        for line in repo_manifest.worktree_status
+    )
+    assert "\ufffd" not in json.dumps(repo_manifest.as_dict(), ensure_ascii=False)
+    statuses = {entry.path: entry.tracked_status for entry in repo_manifest.entries}
+    assert statuses["src/中文模块.py"] == "committed"
+    assert statuses["src/ascii.py"] == "committed"
+    # The Chinese candidate file is hashed by exact content and is stable
+    # across runs (no U+FFFD, no encoding-dependent bytes).
+    chinese_entry = next(
+        entry for entry in repo_manifest.entries if entry.path == "src/中文模块.py"
+    )
+    assert re.fullmatch(r"[0-9a-f]{64}", chinese_entry.sha256) is not None
+    again = tool.collect_manifest(spec_path)
+    again_entry = next(
+        entry for entry in again.repositories[0].entries
+        if entry.path == "src/中文模块.py"
+    )
+    assert again_entry.sha256 == chinese_entry.sha256
+
+
+def test_undecodable_git_output_fails_closed(tool: Any, tmp_path: Path) -> None:
+    # Invalid UTF-8 must raise ManifestError immediately, never be replaced
+    # by U+FFFD and never yield a manifest.
+    with pytest.raises(tool.ManifestError, match="not valid UTF-8"):
+        tool._decode_utf8(b"\xff\xfe invalid \x80", "status")
+
+
+def test_cli_fails_closed_on_undecodable_git_output(tool: Any, tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, {"src/a.py": "abc"})
+    spec_path = _write_spec(tmp_path, repo, [{"role": "core", "path": "src/a.py"}])
+    original_git = tool._git
+
+    def broken_git(repo_root: object, args: list[str]) -> str:
+        if "status" in args:
+            return tool._decode_utf8(b"\xff\xfe", "status")
+        return original_git(repo_root, args)
+
+    tool._git = broken_git  # type: ignore[assignment]
+    try:
+        with pytest.raises(tool.ManifestError, match="not valid UTF-8"):
+            tool.collect_manifest(spec_path)
+    finally:
+        tool._git = original_git  # type: ignore[assignment]

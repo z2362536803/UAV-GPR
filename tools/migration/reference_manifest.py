@@ -50,19 +50,36 @@ def _now_utc_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _decode_utf8(raw: bytes, what: str) -> str:
+    """Decode git output as strict UTF-8; fail-closed on undecodable bytes.
+
+    Git paths are recorded losslessly (either raw UTF-8 or git's own octal
+    escape quoting).  Undecodable output must never be silently replaced with
+    ``U+FFFD`` — an unreadable manifest is better than a corrupted one.
+    """
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ManifestError(
+            f"git {what} output is not valid UTF-8; refusing to record it: {exc}"
+        ) from exc
+
+
 def _git(repo_root: Path, args: list[str]) -> str:
     """Run a read-only git command inside ``repo_root``."""
     proc = subprocess.run(
         ["git", "-C", str(repo_root), *args],
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
     )
+    stdout = _decode_utf8(proc.stdout, " ".join(args))
+    try:
+        stderr = proc.stderr.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        stderr = "<stderr not valid UTF-8>"
     if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip()
+        detail = stderr.strip() or stdout.strip() or "<no output>"
         raise ManifestError(f"git {' '.join(args)!r} failed in {repo_root}: {detail}")
-    return proc.stdout
+    return stdout
 
 
 def _sha256_file(path: Path) -> str:
@@ -365,7 +382,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.out_json:
         _write_atomic(Path(args.out_json), json_text)
     else:
-        sys.stdout.write(json_text)
+        # Write explicit UTF-8 bytes so the stdout manifest is byte-identical
+        # to the file output regardless of the console code page.
+        sys.stdout.buffer.write(json_text.encode("utf-8"))
+        sys.stdout.buffer.flush()
     if args.out_md:
         _write_atomic(Path(args.out_md), _dump_markdown(manifest, generated_at))
     return 0
