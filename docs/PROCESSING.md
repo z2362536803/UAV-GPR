@@ -8,6 +8,11 @@
 - 算法优先迁移钢筋仪项目中已有、经过测试的实现。
 - 每个阶段独立、可测试、无 UI/硬件依赖。
 - 输入不可变，输出新对象；完整记录参数、版本、输入/输出域和历史。
+- `frequency_raw` 只允许作为处理输入；任何阶段输出 `frequency_raw`（含 raw→raw 恒等）都拒绝。
+- 每个阶段用稳定 `stage_name` 标识，同一处理历史内不得重复应用同一阶段；修改 `stage_version` 不能绕过，重新处理必须开始新的 history/revision。
+- 阶段携带的校准/背景引用必须与其输入/输出域兼容（域匹配时显式继承）：输出 `frequency_calibrated` 必须带校准引用，输出 `frequency_background_applied` 必须带空采引用，时域阶段不得携带频域引用。后续记录显式携带的引用必须与产生其对应域输入的上一记录相同；省略重复引用合法。
+- 数据处理历史当前必须从 `frequency_raw` 开始；从已严格验证的派生频域快照开始需要未来的独立 provenance anchor，当前不允许。
+- 本契约不声称代码验证任意 stage_name 的真实数学含义；算法数学由对应阶段实现任务验证（尚未实现）。
 - 实时预览和任务后重处理复用同一算法，不复制两套数学实现。
 - 处理失败不能破坏已保存的 `frequency_raw`。
 
@@ -15,18 +20,21 @@
 
 ```text
 frequency_raw
-  -> OSL calibration (optional)
-  -> frequency_calibrated snapshot (optional)
-  -> air background subtraction (optional)
-  -> frequency bandpass (optional)
-  -> frequency-to-time / IFFT
-  -> time_base
-  -> dewow (optional)
-  -> flat reflection filter (optional)
-  -> time zero (future, optional)
-  -> continuous background (future, optional)
-  -> time_processed
+  -> OSL calibration (optional)                       -> frequency_calibrated
+  -> air background subtraction (optional)            -> frequency_background_applied
+  -> frequency bandpass (optional)                    -> frequency_filtered
+  -> frequency-to-time / IFFT                         -> time_base
+  -> dewow (optional)                                 -> time_processed
+  -> flat reflection filter (optional)                -> time_processed
+  -> time zero (future, optional)                     -> time_processed
+  -> continuous background (future, optional)         -> time_processed
 ```
+
+数据域转换规则（`DataDomain`）：
+
+- 频域派生链：`frequency_raw` → `frequency_calibrated` → `frequency_background_applied` → `frequency_filtered` → `time_base` → `time_processed`；`frequency_filtered` 只由带通阶段产生。
+- 不允许 time 域返回 frequency 域；不允许 `time_processed → time_base`；不允许跳过 `time_base` 直接产生 `time_processed`。
+- history 第一项输入域必须是 `frequency_raw`；从派生频域快照开始需要未来引入独立、不可变且可验证的 provenance anchor（当前未实现，不允许）。`time_base` 与 `time_processed` 的 `TimeDomainScan` 都必须携带完整、非空、最后输出域与 kind 匹配的历史。
 
 没有启用时域后处理时可以不存在 `time_processed`，UI 使用 `time_base`。不得把处理后的数组写回 `time_base`。
 
@@ -55,7 +63,7 @@ frequency_raw
 - 实时路径可以只处理最新道和有界显示窗口。
 - 会依赖邻道的阶段必须定义延迟、边界和“暂定结果”状态。
 - 参数变更产生新的 processing revision；过期 worker 结果按 revision 丢弃。
-- 任务后重处理从 raw 或经过严格 provenance 验证的 calibrated 数据开始。
+- 任务后重处理当前只能从 `frequency_raw` 开始；未来只有在独立、不可变、可验证的 provenance anchor 实现后，才允许从经严格验证的 calibrated 快照开始，且记录方式按当时文档/ADR 明确。
 - UI 的显示增益、色图和动态范围不是数据处理历史，除非它们被真正写入导出图像配置。
 
 ## 8. 性能规则
@@ -69,6 +77,7 @@ frequency_raw
 
 - 从钢筋仪项目冻结算法输入/输出黄金样本及参考文件哈希。
 - 覆盖零输入、脉冲、常量、复数、双通道、短数组、非法轴和非有限值。
+- 验证数据域转换合法性（raw 永不出现在输出）、reference 兼容性、按 `stage_name` 的重复阶段拒绝，以及 `time_base`/`time_processed` 的完整非空 provenance。
 - 验证处理历史顺序、参数序列化、重复阶段拒绝和 raw 不变。
 - 保存/加载后对拍处理结果；回放不重复 OSL 或背景。
 - 性能报告同时给出算法耗时、内存峰值和数据规模。

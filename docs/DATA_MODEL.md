@@ -145,6 +145,32 @@
 - 执行 UTC；
 - 可选校准/背景引用 ID。
 
+数据域与合法转换（fail-closed）：
+
+- `DataDomain`：`frequency_raw`、`frequency_calibrated`、`frequency_background_applied`、`frequency_filtered`、`time_base`、`time_processed`。
+- `frequency_raw` 只允许作为处理输入；任何阶段输出 `frequency_raw`（包括 raw→raw 恒等）都被拒绝。
+- 频域派生顺序：`frequency_calibrated`（OSL）→ `frequency_background_applied`（空采背景）→ `frequency_filtered`（频域带通）→ `time_base`（IFFT）→ `time_processed`（Dewow/Flat Reflection，可连串）。`frequency_filtered` 只由带通阶段产生。
+- 不允许 time 域返回 frequency 域；不允许 `time_processed → time_base`；不允许跳过 `time_base` 直接产生 `time_processed`。
+- history 第一项的输入域**必须是 `frequency_raw`**。从已严格验证的派生频域快照（`frequency_calibrated`/`frequency_background_applied`/`frequency_filtered`）开始，需要未来引入独立、不可变且可验证的来源锚点（provenance anchor）后才能支持；在锚点存在之前不得把派生快照当历史起点，即使该记录携带引用。
+- 当前实现不回传"任意阶段名的真实数学含义"：域标识只描述数据域与转换链，具体算法数学由对应阶段实现任务验证（尚未实现）。
+
+provenance 完整性：
+
+- `TimeDomainScan` 的 `kind=time_base` 与 `kind=time_processed` 都必须携带完整、非空、转换链合法且最后输出域与 `kind` 匹配的 `ProcessingHistory`；空 history 一律拒绝。
+- `time_processed` 的 history 必须先合法产生 `time_base`，再进入 `time_processed`。
+
+reference 兼容规则：
+
+- 输出 `frequency_calibrated` 的阶段必须携带 `calibration_profile_id`；输出 `frequency_background_applied` 的阶段必须携带 `background_reference_id`。
+- 校准/背景引用只能出现在对应域相关的阶段（该阶段输入或输出为该域）；时域阶段不得携带任何频域引用。
+- 后续频域阶段可显式继承已有引用（其输入或输出域与引用对应）；继承是逐记录、可序列化的显式选择，不是隐含继承。
+- provenance 连续性：后续记录显式携带的校准/背景引用必须与**产生其对应域输入的上一记录**相同（例如 `raw → calibrated(CAL_A) → filtered(CAL_B)` 被拒绝）；省略重复引用不是引用变化（产生记录的引用仍完整保存在 history 中），同一 ID 的显式继承合法。
+
+重复阶段规则：
+
+- 同一 `ProcessingHistory` 内稳定 `stage_name` 只能应用一次；修改 `stage_version` 不能绕过。
+- 真正的重新处理必须开始新的 history/revision；本轮只固定 history 契约，不实现完整 revision 服务。
+
 ## 9. 位置与显示
 
 地图位置只来自可用 `GnssMatch`。没有定位的道仍存在于 B-scan，不创建虚假坐标。时间估计距离如果未来引入，必须使用不同的 `position_source=time_estimated`，不得写入 GNSS 字段。

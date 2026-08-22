@@ -4,22 +4,41 @@
 and version, fully JSON-safe canonical parameters, the input/output
 ``DataDomain``, the executing software version, execution UTC and optional
 calibration/background reference IDs (docs/DATA_MODEL.md section 8,
-docs/PROCESSING.md).
+docs/PROCESSING.md).  Both the record's data-domain transition and its
+reference/domain compatibility are validated fail-closed at construction
+(docs/PROCESSING.md sections 2 and 9):
+
+- ``frequency_raw`` is never a processing output, including identity hops;
+- no transition may return from a time domain to a frequency domain;
+- ``time_processed`` may not transition back to ``time_base``;
+- a stage producing ``frequency_calibrated`` requires ``calibration_profile_id``
+  and a stage producing ``frequency_background_applied`` requires
+  ``background_reference_id``; a reference may be carried only by stages
+  whose input or output domain is the corresponding domain, so time-domain
+  stages never carry frequency references;
+- later frequency stages may explicitly inherit an already-relevant reference
+  (input/output domain matches) — inheritance is a per-record, serializable
+  choice, never implied; an explicit reference change between chained stages
+  (incoming ID differs from the ID of the record that produced its input) is
+  rejected, while omitting a repeated reference stays legal.
 
 ``ProcessingHistory`` is an immutable, ordered list of records.  Appending
 returns a new object and validates the domain chain (each record's
-``input_domain`` must equal the previous record's ``output_domain``) and the
-uniqueness of a ``(stage_name, stage_version)`` application; re-applying a
-stage requires a new stage version.
+``input_domain`` must equal the previous record's ``output_domain``), the
+start domain (the first record must consume ``frequency_raw`` only — starting
+from a derived frequency snapshot requires an independent, immutable,
+verifiable provenance anchor that does not exist yet) and stage uniqueness: a
+stable ``stage_name`` may be applied only once per history, and changing
+``stage_version`` does not permit re-application.  Re-processing opens a new
+history/revision.
 
 ``TimeDomainScan`` is the immutable time-domain container with the fixed
 shape ``trace x channel x time``, a strictly increasing one-dimensional time
 axis in seconds and a ``kind`` of ``time_base`` or ``time_processed``
-(docs/PROCESSING.md section 4).  Provenance is fail-closed:
-
-- ``time_base`` may have an empty history (raw IFFT output with no recorded
-  stage) or a history ending in ``time_base``;
-- ``time_processed`` requires a non-empty history ending in ``time_processed``.
+(docs/PROCESSING.md section 4).  Provenance is fail-closed: both kinds
+require a complete, non-empty history whose transitions legally reach
+``time_base`` (then ``time_processed``) and whose last record matches the
+scan kind exactly.
 
 Arrays are bytes-backed and can never be made writable again; caller arrays
 and returned views cannot mutate the model.  No uncalibrated depth field or
@@ -67,6 +86,174 @@ _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _TIME_DTYPE = np.dtype(np.float64)
 _DATA_DTYPE = np.dtype(np.complex128)
+
+# Legal data-domain transitions (docs/PROCESSING.md section 2).  Each entry
+# lists the output domains a stage may legally produce from that input domain.
+# frequency_raw is deliberately absent from every output set: raw data is
+# never a processing output.
+_ALLOWED_TRANSITIONS: dict[DataDomain, frozenset[DataDomain]] = {
+    DataDomain.FREQUENCY_RAW: frozenset(
+        {
+            DataDomain.FREQUENCY_CALIBRATED,
+            DataDomain.FREQUENCY_BACKGROUND_APPLIED,
+            DataDomain.FREQUENCY_FILTERED,
+            DataDomain.TIME_BASE,
+        }
+    ),
+    DataDomain.FREQUENCY_CALIBRATED: frozenset(
+        {
+            DataDomain.FREQUENCY_BACKGROUND_APPLIED,
+            DataDomain.FREQUENCY_FILTERED,
+            DataDomain.TIME_BASE,
+        }
+    ),
+    DataDomain.FREQUENCY_BACKGROUND_APPLIED: frozenset(
+        {
+            DataDomain.FREQUENCY_FILTERED,
+            DataDomain.TIME_BASE,
+        }
+    ),
+    DataDomain.FREQUENCY_FILTERED: frozenset({DataDomain.TIME_BASE}),
+    DataDomain.TIME_BASE: frozenset({DataDomain.TIME_PROCESSED}),
+    DataDomain.TIME_PROCESSED: frozenset({DataDomain.TIME_PROCESSED}),
+}
+
+# A processing history must start from frequency_raw.  Starting from a derived
+# frequency snapshot (calibrated / background_applied / filtered) would need an
+# independent, immutable and verifiable provenance anchor linking that
+# snapshot back to raw; such an anchor does not exist yet, so those starts are
+# rejected (future work, see docs/PROCESSING.md).
+_START_DOMAINS = frozenset({DataDomain.FREQUENCY_RAW})
+
+
+def _validate_transition(record: ProcessingRecord) -> None:
+    """Reject any record whose input/output domain pair is not a legal hop."""
+    if record.output_domain not in _ALLOWED_TRANSITIONS[record.input_domain]:
+        raise DomainError(
+            ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+            "illegal data-domain transition",
+            {
+                "stage_name": record.stage_name,
+                "input_domain": record.input_domain.value,
+                "output_domain": record.output_domain.value,
+            },
+        )
+
+
+def _validate_provenance_continuity(
+    previous: ProcessingRecord, incoming: ProcessingRecord
+) -> None:
+    """Reject an explicit reference change between two chained records.
+
+    When the incoming record's *input* domain is ``frequency_calibrated``
+    (resp. ``frequency_background_applied``) and it explicitly carries a
+    calibration (resp. background) reference, the chained previous record
+    produced that domain and must carry the identical reference — otherwise
+    the staged data would mix two provenance sources.  References newly
+    introduced by a producing stage (its output domain matches) are exempt
+    from the comparison, and omitting a repeated reference is legal: the
+    producer's ID remains recorded in the history.
+    """
+    if (
+        incoming.input_domain is DataDomain.FREQUENCY_CALIBRATED
+        and incoming.calibration_profile_id is not None
+        and previous.calibration_profile_id != incoming.calibration_profile_id
+    ):
+        raise DomainError(
+            ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+            "calibration reference changed between stages",
+            {
+                "stage": incoming.stage_name,
+                "previous_calibration_profile_id": (
+                    previous.calibration_profile_id.to_json()
+                    if previous.calibration_profile_id is not None
+                    else None
+                ),
+                "incoming_calibration_profile_id": (
+                    incoming.calibration_profile_id.to_json()
+                ),
+            },
+        )
+    if (
+        incoming.input_domain is DataDomain.FREQUENCY_BACKGROUND_APPLIED
+        and incoming.background_reference_id is not None
+        and previous.background_reference_id != incoming.background_reference_id
+    ):
+        raise DomainError(
+            ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+            "background reference changed between stages",
+            {
+                "stage": incoming.stage_name,
+                "previous_background_reference_id": (
+                    previous.background_reference_id.to_json()
+                    if previous.background_reference_id is not None
+                    else None
+                ),
+                "incoming_background_reference_id": (
+                    incoming.background_reference_id.to_json()
+                ),
+            },
+        )
+
+
+def _validate_references(record: ProcessingRecord) -> None:
+    """Reference/domain compatibility rules (see the module docstring)."""
+    if (
+        record.output_domain is DataDomain.FREQUENCY_CALIBRATED
+        and record.calibration_profile_id is None
+    ):
+        raise DomainError(
+            ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+            "a stage producing frequency_calibrated requires "
+            "calibration_profile_id",
+            {
+                "stage_name": record.stage_name,
+                "output_domain": record.output_domain.value,
+            },
+        )
+    if (
+        record.output_domain is DataDomain.FREQUENCY_BACKGROUND_APPLIED
+        and record.background_reference_id is None
+    ):
+        raise DomainError(
+            ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+            "a stage producing frequency_background_applied requires "
+            "background_reference_id",
+            {
+                "stage_name": record.stage_name,
+                "output_domain": record.output_domain.value,
+            },
+        )
+    if (
+        record.calibration_profile_id is not None
+        and record.input_domain is not DataDomain.FREQUENCY_CALIBRATED
+        and record.output_domain is not DataDomain.FREQUENCY_CALIBRATED
+    ):
+        raise DomainError(
+            ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+            "calibration_profile_id is incompatible with this record's "
+            "data domains",
+            {
+                "stage_name": record.stage_name,
+                "input_domain": record.input_domain.value,
+                "output_domain": record.output_domain.value,
+            },
+        )
+    if (
+        record.background_reference_id is not None
+        and record.input_domain is not DataDomain.FREQUENCY_BACKGROUND_APPLIED
+        and record.output_domain is not DataDomain.FREQUENCY_BACKGROUND_APPLIED
+    ):
+        raise DomainError(
+            ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+            "background_reference_id is incompatible with this record's "
+            "data domains",
+            {
+                "stage_name": record.stage_name,
+                "input_domain": record.input_domain.value,
+                "output_domain": record.output_domain.value,
+            },
+        )
 
 
 def _require_stage_name(value: object) -> str:
@@ -214,6 +401,10 @@ class ProcessingRecord:
         object.__setattr__(self, "_software_version", sw_version)
         object.__setattr__(self, "_calibration_profile_id", calibration_profile_id)
         object.__setattr__(self, "_background_reference_id", background_reference_id)
+        # Fail-closed after the identity fields are frozen: the transition and
+        # the reference/domain compatibility checks may use any property.
+        _validate_transition(self)
+        _validate_references(self)
 
     @property
     def stage_name(self) -> str:
@@ -341,6 +532,13 @@ class ProcessingHistory:
     """Immutable ordered processing history (see module docstring).
 
     Every append returns a new object; this instance is never modified.
+    The first record's input domain must currently be ``frequency_raw``
+    (starting from a derived frequency snapshot requires a future,
+    independent provenance anchor), every record must itself be a legal
+    single transition (enforced at record construction), consecutive records
+    must chain exactly and a stable ``stage_name`` may appear only once per
+    history (a new ``stage_version`` does not allow re-application;
+    re-processing needs a new history).
     """
 
     _records: tuple[ProcessingRecord, ...]
@@ -353,6 +551,15 @@ class ProcessingHistory:
                     "history entries must be ProcessingRecord, "
                     f"got {type(record).__name__}"
                 )
+        if result and result[0].input_domain not in _START_DOMAINS:
+            raise DomainError(
+                ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+                "processing history must start from frequency_raw",
+                {
+                    "first_stage": result[0].stage_name,
+                    "first_input_domain": result[0].input_domain.value,
+                },
+            )
         for left, right in pairwise(result):
             if left.output_domain != right.input_domain:
                 raise DomainError(
@@ -365,20 +572,20 @@ class ProcessingHistory:
                         "incoming_input_domain": right.input_domain.value,
                     },
                 )
-        seen: set[tuple[str, str]] = set()
+            _validate_provenance_continuity(left, right)
+        seen: set[str] = set()
         for record in result:
-            key = (record.stage_name, record.stage_version)
-            if key in seen:
+            if record.stage_name in seen:
                 raise DomainError(
                     ErrorCode.INVALID_ARGUMENT,
-                    "a stage application may appear only once per history; "
-                    "re-application requires a new stage version",
+                    "a stage may be applied only once per history; "
+                    "re-processing requires a new history/revision",
                     {
                         "stage_name": record.stage_name,
                         "stage_version": record.stage_version,
                     },
                 )
-            seen.add(key)
+            seen.add(record.stage_name)
         object.__setattr__(self, "_records", result)
 
     @property
@@ -417,16 +624,21 @@ class ProcessingHistory:
 def _validate_history_kind(
     history: ProcessingHistory, kind: TimeDomainKind
 ) -> None:
-    """Fail-closed provenance rule linking the scan kind to its history."""
+    """Fail-closed provenance rule linking the scan kind to its history.
+
+    Both kinds require a complete, non-empty history: ``time_base`` must end
+    in ``time_base`` (reached through legal transitions starting from
+    ``frequency_raw``) and ``time_processed`` must first legally produce
+    ``time_base`` and then end in ``time_processed``.
+    """
     expected_domain = DataDomain(kind.value)
     if not history.records:
-        if kind is TimeDomainKind.TIME_PROCESSED:
-            raise DomainError(
-                ErrorCode.PROCESSING_DOMAIN_MISMATCH,
-                "time_processed data requires a non-empty processing history",
-                {"kind": kind.value},
-            )
-        return
+        raise DomainError(
+            ErrorCode.PROCESSING_DOMAIN_MISMATCH,
+            "time-domain data requires a non-empty processing history "
+            "ending in the kind's data domain",
+            {"kind": kind.value},
+        )
     last = history.records[-1]
     if last.output_domain != expected_domain:
         raise DomainError(
@@ -446,10 +658,10 @@ class TimeDomainScan:
 
     ``time_axis_s`` is a strictly increasing, finite one-dimensional axis in
     seconds (negative start values are allowed: the axis must only be ordered).
-    ``kind`` distinguishes ``time_base`` from ``time_processed``; a
-    ``time_processed`` scan requires a processing history ending in
-    ``time_processed`` (see :func:`_validate_history_kind`).  ``metadata``
-    follows the same per-trace rules as ``FrequencyScan``.
+    ``kind`` distinguishes ``time_base`` from ``time_processed``; both require
+    a complete, non-empty history ending in the matching domain
+    (see :func:`_validate_history_kind`).  ``metadata`` follows the same
+    per-trace rules as ``FrequencyScan``.
     """
 
     channels: tuple[ChannelSpec, ...]

@@ -158,7 +158,9 @@ class DataDomain(StableStrEnum):
 
     Frequency domains cover ``frequency_raw`` and every derived frequency
     representation; time domains identify ``time_base`` (IFFT output) and
-    ``time_processed`` (after time-domain stages).  A ``ProcessingRecord``
+    ``time_processed`` (after time-domain stages).  ``frequency_raw`` is only
+    ever an input (never a processing output); ``frequency_filtered`` is the
+    output domain of the frequency bandpass stage.  A ``ProcessingRecord``
     links input and output domains; a ``TimeDomainScan`` must end its history
     in the domain matching its ``kind``.
     """
@@ -166,6 +168,7 @@ class DataDomain(StableStrEnum):
     FREQUENCY_RAW = "frequency_raw"
     FREQUENCY_CALIBRATED = "frequency_calibrated"
     FREQUENCY_BACKGROUND_APPLIED = "frequency_background_applied"
+    FREQUENCY_FILTERED = "frequency_filtered"
     TIME_BASE = "time_base"
     TIME_PROCESSED = "time_processed"
 
