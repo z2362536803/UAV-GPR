@@ -25,6 +25,7 @@
 | [OFFLINE_MAP.md](OFFLINE_MAP.md) | 离线地图、无底图降级和轨迹性能 |
 | [PERFORMANCE.md](PERFORMANCE.md) | 基准方法、预算和长时稳定性 |
 | [TESTING.md](TESTING.md) | 测试分层、矩阵和硬件验收 |
+| [ISSUE_REVIEW_STANDARD.md](ISSUE_REVIEW_STANDARD.md) | Issue 完成报告真实性、代码验收、Git 交付与合并审查标准 |
 | [DEPLOYMENT_HM30.md](DEPLOYMENT_HM30.md) | HM30 网络、供电和干扰验证计划 |
 | [REFERENCE_MIGRATION.md](REFERENCE_MIGRATION.md) | 两个参考项目的迁移白名单与审计方法 |
 | [reference-baselines/](reference-baselines/README.md) | 参考项目只读基线清单、生成工具与格式说明 |
