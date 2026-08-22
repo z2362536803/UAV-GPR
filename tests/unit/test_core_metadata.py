@@ -15,12 +15,14 @@ from uav_gpr.core import (
     GnssFixQuality,
     GnssMatch,
     GnssMatchMethod,
+    GnssUnavailableReason,
     MissionId,
     MonotonicNs,
     TraceMetadata,
     TraceQualityReason,
     TraceQualityStatus,
     TraceUid,
+    to_utc_iso,
 )
 
 MISSION = MissionId("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
@@ -67,6 +69,7 @@ def _metadata(
     match: GnssMatch | None = None,
     status: TraceQualityStatus = TraceQualityStatus.NOMINAL,
     reasons: tuple[TraceQualityReason, ...] = (),
+    hash_value: str | None = HASH64,
 ) -> TraceMetadata:
     if match is None and TraceQualityReason.GNSS_MISSING not in reasons:
         status = TraceQualityStatus.DEGRADED
@@ -86,7 +89,7 @@ def _metadata(
         actual_interval_s=actual,
         schedule_error_s=schedule,
         connection_generation=2,
-        raw_trace_sha256=HASH64,
+        raw_trace_sha256=hash_value,
         gnss_match=match,
         quality_status=status,
         quality_reasons=reasons,
@@ -205,6 +208,113 @@ def test_raw_hash_field_contract() -> None:
         _fix_time_domain(raw_trace_sha256="a" * 63)
     with pytest.raises(DomainError):
         _fix_time_domain(raw_trace_sha256="a" * 65)
+    with pytest.raises(TypeError):
+        _fix_time_domain(raw_trace_sha256=12345)  # type: ignore[arg-type]
+
+
+def test_acquired_state_allows_no_hash_and_round_trips() -> None:
+    acquired = _metadata(hash_value=None)
+    assert acquired.raw_trace_sha256 is None
+    assert TraceMetadata.from_dict(acquired.to_dict()) == acquired
+    payload = acquired.to_dict()
+    assert payload["raw_trace_sha256"] is None
+
+
+def test_with_integrity_first_attach_returns_new_object() -> None:
+    acquired = _metadata(hash_value=None)
+    attached = acquired.with_integrity(HASH64)
+    assert attached.raw_trace_sha256 == HASH64
+    assert attached is not acquired
+    assert acquired.raw_trace_sha256 is None  # original stays acquired
+
+
+def test_with_integrity_identical_hash_is_explicit_noop() -> None:
+    attached = _metadata(hash_value=HASH64)
+    again = attached.with_integrity(HASH64)
+    assert again is attached
+
+
+def test_with_integrity_conflicting_hash_fails_closed() -> None:
+    attached = _metadata(hash_value=HASH64)
+    with pytest.raises(DomainError) as excinfo:
+        attached.with_integrity("b" * 64)
+    assert excinfo.value.code is ErrorCode.ID_CONFLICT
+    assert excinfo.value.context["stored_hash"] == HASH64
+    assert excinfo.value.context["incoming_hash"] == "b" * 64
+    assert attached.raw_trace_sha256 == HASH64  # unchanged
+
+
+def test_with_integrity_rejects_non_canonical_hash() -> None:
+    acquired = _metadata(hash_value=None)
+    with pytest.raises(DomainError) as excinfo:
+        acquired.with_integrity("A" * 64)
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT
+    assert acquired.raw_trace_sha256 is None
+
+
+def test_gnss_match_midpoint_must_equal_sweep_midpoint() -> None:
+    wrong_match = GnssMatch(
+        fix=_good_match().fix,
+        trace_midpoint_utc=FINISH_UTC,  # differs from the sweep midpoint
+        age_s=0.3,
+        method=GnssMatchMethod.NEAREST_MIDPOINT,
+        usable_for_map=True,
+        reason=None,
+    )
+    with pytest.raises(DomainError) as excinfo:
+        _metadata(match=wrong_match)
+    assert excinfo.value.code is ErrorCode.GNSS_MIDPOINT_MISMATCH
+    assert excinfo.value.context["sweep_midpoint_utc"] == to_utc_iso(MID_UTC)
+    assert excinfo.value.context["match_midpoint_utc"] == to_utc_iso(FINISH_UTC)
+
+
+def test_unusable_gnss_match_cannot_be_summarized_as_nominal() -> None:
+    stale_match = GnssMatch(
+        fix=_good_match().fix,
+        trace_midpoint_utc=MID_UTC,
+        age_s=7.0,
+        method=GnssMatchMethod.NEAREST_MIDPOINT,
+        usable_for_map=False,
+        reason=GnssUnavailableReason.STALE,
+    )
+    # Missing the required trace reason -> rejected.
+    with pytest.raises(DomainError) as excinfo:
+        _metadata(match=stale_match)
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT
+    # With the matching reason, the status can never be nominal.
+    degraded = _metadata(
+        match=stale_match,
+        status=TraceQualityStatus.DEGRADED,
+        reasons=(TraceQualityReason.GNSS_STALE,),
+    )
+    assert degraded.quality_status is TraceQualityStatus.DEGRADED
+    with pytest.raises(DomainError):
+        _metadata(
+            match=stale_match,
+            status=TraceQualityStatus.NOMINAL,
+            reasons=(TraceQualityReason.GNSS_STALE,),
+        )
+
+
+def test_with_gnss_match_manages_unusable_reason_automatically() -> None:
+    no_match = _metadata(match=None)
+    stale_match = GnssMatch(
+        fix=_good_match().fix,
+        trace_midpoint_utc=MID_UTC,
+        age_s=7.0,
+        method=GnssMatchMethod.NEAREST_MIDPOINT,
+        usable_for_map=False,
+        reason=GnssUnavailableReason.STALE,
+    )
+    attached = no_match.with_gnss_match(stale_match)
+    assert attached.gnss_match is stale_match
+    assert TraceQualityReason.GNSS_STALE in attached.quality_reasons
+    assert TraceQualityReason.GNSS_MISSING not in attached.quality_reasons
+    assert attached.quality_status is not TraceQualityStatus.NOMINAL
+    # Detach restores gnss_missing.
+    detached = attached.with_gnss_match(None)
+    assert TraceQualityReason.GNSS_MISSING in detached.quality_reasons
+    assert TraceQualityReason.GNSS_STALE not in detached.quality_reasons
 
 
 def test_metadata_is_immutable() -> None:
@@ -256,3 +366,162 @@ def test_quality_status_reason_consistency() -> None:
             status=TraceQualityStatus.NOMINAL,
             reasons=(TraceQualityReason.DEVICE_STATUS,),
         )
+
+
+def test_with_integrity_rejects_none_and_non_string() -> None:
+    acquired = _metadata(hash_value=None)
+    with pytest.raises(TypeError, match="must be a str"):
+        acquired.with_integrity(None)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="must be a str"):
+        acquired.with_integrity(12345)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="must be a str"):
+        attached = _metadata(hash_value=HASH64)
+        attached.with_integrity(b"a" * 64)  # type: ignore[arg-type]
+    # Originals are unchanged by the rejected calls.
+    assert acquired.raw_trace_sha256 is None
+
+
+def _stale_match() -> GnssMatch:
+    return GnssMatch(
+        fix=_good_match().fix,
+        trace_midpoint_utc=MID_UTC,
+        age_s=7.0,
+        method=GnssMatchMethod.NEAREST_MIDPOINT,
+        usable_for_map=False,
+        reason=GnssUnavailableReason.STALE,
+    )
+
+
+def test_usable_match_forbids_all_gnss_quality_reasons() -> None:
+    for reason in (
+        TraceQualityReason.GNSS_NO_FIX,
+        TraceQualityReason.GNSS_STALE,
+        TraceQualityReason.GNSS_INVALID,
+    ):
+        with pytest.raises(DomainError):
+            _metadata(
+                match=_good_match(),
+                status=TraceQualityStatus.DEGRADED,
+                reasons=(reason,),
+            )
+    with pytest.raises(DomainError):
+        _metadata(
+            match=_good_match(),
+            status=TraceQualityStatus.DEGRADED,
+            reasons=(TraceQualityReason.GNSS_MISSING,),
+        )
+
+
+def test_unusable_match_forbids_mismatched_gnss_reasons() -> None:
+    stale = _stale_match()
+    with pytest.raises(DomainError):
+        _metadata(
+            match=stale,
+            status=TraceQualityStatus.DEGRADED,
+            reasons=(TraceQualityReason.GNSS_INVALID,),
+        )
+    with pytest.raises(DomainError):
+        _metadata(
+            match=stale,
+            status=TraceQualityStatus.DEGRADED,
+            reasons=(TraceQualityReason.GNSS_STALE, TraceQualityReason.GNSS_NO_FIX),
+        )
+    ok = _metadata(
+        match=stale,
+        status=TraceQualityStatus.DEGRADED,
+        reasons=(TraceQualityReason.GNSS_STALE, TraceQualityReason.DEVICE_STATUS),
+    )
+    assert TraceQualityReason.GNSS_STALE in ok.quality_reasons
+
+
+def test_from_dict_rejects_contradicted_gnss_quality_reasons() -> None:
+    good = _metadata(match=_good_match())
+    payload = good.to_dict()
+    payload["quality_reasons"] = [TraceQualityReason.GNSS_STALE.value]
+    with pytest.raises(DomainError):
+        TraceMetadata.from_dict(payload)
+    stale = _metadata(
+        match=_stale_match(),
+        status=TraceQualityStatus.DEGRADED,
+        reasons=(TraceQualityReason.GNSS_STALE,),
+    )
+    stale_payload = stale.to_dict()
+    stale_payload["quality_reasons"] = []
+    with pytest.raises(DomainError):
+        TraceMetadata.from_dict(stale_payload)
+
+
+def test_with_data_quality_enforces_bidirectional_consistency() -> None:
+    usable_meta = _metadata(match=_good_match())
+    with pytest.raises(DomainError):
+        usable_meta.with_data_quality(
+            TraceQualityStatus.DEGRADED, (TraceQualityReason.GNSS_STALE,)
+        )
+    stale_meta = _metadata(
+        match=_stale_match(),
+        status=TraceQualityStatus.DEGRADED,
+        reasons=(TraceQualityReason.GNSS_STALE,),
+    )
+    with pytest.raises(DomainError):
+        stale_meta.with_data_quality(
+            TraceQualityStatus.DEGRADED, (TraceQualityReason.GNSS_INVALID,)
+        )
+    updated = stale_meta.with_data_quality(
+        TraceQualityStatus.DEGRADED,
+        (TraceQualityReason.GNSS_STALE, TraceQualityReason.DEVICE_STATUS),
+    )
+    assert updated.quality_reasons == (
+        TraceQualityReason.GNSS_STALE,
+        TraceQualityReason.DEVICE_STATUS,
+    )
+    assert stale_meta.quality_reasons == (TraceQualityReason.GNSS_STALE,)
+
+
+def test_no_gnss_match_forbids_other_gnss_reasons() -> None:
+    for bad in (
+        TraceQualityReason.GNSS_NO_FIX,
+        TraceQualityReason.GNSS_STALE,
+        TraceQualityReason.GNSS_INVALID,
+    ):
+        with pytest.raises(DomainError) as excinfo:
+            _metadata(
+                match=None,
+                status=TraceQualityStatus.DEGRADED,
+                reasons=(TraceQualityReason.GNSS_MISSING, bad),
+            )
+        assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT
+        assert "forbidden_reasons" in excinfo.value.context
+
+
+def test_no_gnss_match_allows_non_gnss_reasons() -> None:
+    metadata = _metadata(
+        match=None,
+        status=TraceQualityStatus.DEGRADED,
+        reasons=(TraceQualityReason.GNSS_MISSING, TraceQualityReason.DEVICE_STATUS),
+    )
+    assert set(metadata.quality_reasons) == {
+        TraceQualityReason.GNSS_MISSING,
+        TraceQualityReason.DEVICE_STATUS,
+    }
+
+
+def test_no_gnss_match_rule_cannot_be_bypassed_by_from_dict() -> None:
+    metadata = _metadata(match=None)
+    payload = metadata.to_dict()
+    payload["quality_reasons"] = [
+        TraceQualityReason.GNSS_MISSING.value,
+        TraceQualityReason.GNSS_STALE.value,
+    ]
+    with pytest.raises(DomainError) as excinfo:
+        TraceMetadata.from_dict(payload)
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT
+
+
+def test_no_gnss_match_rule_cannot_be_bypassed_by_with_data_quality() -> None:
+    metadata = _metadata(match=None)
+    with pytest.raises(DomainError) as excinfo:
+        metadata.with_data_quality(
+            TraceQualityStatus.DEGRADED,
+            (TraceQualityReason.GNSS_MISSING, TraceQualityReason.GNSS_STALE),
+        )
+    assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT

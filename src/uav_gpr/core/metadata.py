@@ -1,16 +1,30 @@
-"""Immutable trace metadata with copy-on-update integrity attachment.
+"""Immutable trace metadata with copy-on-update integrity and GNSS binding.
 
 ``TraceMetadata`` is the per-trace contract: identity, sweep time windows
 (UTC and monotonic stored separately), scheduling fields, connection
 generation, the raw trace SHA-256 **field contract** (the hash itself is
 computed by storage, never here), the GNSS match and a data quality summary.
 
+Lifecycle:
+
+- **acquired**: ``raw_trace_sha256 is None`` — the trace exists but integrity
+  has not been attached yet.
+- **integrity-attached**: ``raw_trace_sha256`` is a strict 64-character
+  lowercase hexadecimal string.  Attach through :meth:`with_integrity`,
+  which returns a new object (the original stays acquired).  Attaching an
+  identical hash is an explicit idempotent no-op; attaching a different hash
+  to an already-attached trace is a conflict and fails closed with
+  ``ErrorCode.ID_CONFLICT``.
+
 The first trace may have ``actual_interval_s`` / ``schedule_error_s`` set to
 ``None`` (there is no previous trace); every later trace requires them.
 
-"Acquired" metadata gets integrity information attached by returning a new
-object through :meth:`with_gnss_match` / :meth:`with_data_quality`; frozen
-instances are never modified.
+A ``gnss_match``, when present, must carry the exact same UTC instant as
+``sweep_midpoint_utc`` (a wrong midpoint is a structured
+``gnss_midpoint_mismatch`` error).  GNSS states that are not usable for the
+map (``no_fix`` / ``stale`` / ``invalid`` and friends) can never be
+summarized as ``nominal``; the matching structural quality reason is
+required.
 """
 
 from __future__ import annotations
@@ -23,6 +37,7 @@ from datetime import datetime
 from typing import Self
 
 from uav_gpr.core.enums import (
+    GnssUnavailableReason,
     TraceQualityReason,
     TraceQualityStatus,
 )
@@ -32,6 +47,38 @@ from uav_gpr.core.identifiers import DeviceId, MissionId, TraceUid
 from uav_gpr.core.timeutil import MonotonicNs, ensure_utc, from_utc_iso, to_utc_iso
 
 _RAW_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+
+# GnssUnavailableReason -> trace-level quality reason (append-only mapping).
+_GNSS_REASON_MAP = {
+    GnssUnavailableReason.NO_FIX: TraceQualityReason.GNSS_NO_FIX,
+    GnssUnavailableReason.CLOCK_UNAVAILABLE: TraceQualityReason.GNSS_NO_FIX,
+    GnssUnavailableReason.OUT_OF_RANGE: TraceQualityReason.GNSS_NO_FIX,
+    GnssUnavailableReason.STALE: TraceQualityReason.GNSS_STALE,
+    GnssUnavailableReason.INVALID: TraceQualityReason.GNSS_INVALID,
+}
+_GNSS_TRACE_REASONS = frozenset(_GNSS_REASON_MAP.values())
+
+
+def _require_raw_hash(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or _RAW_HASH_RE.fullmatch(value) is None:
+        raise DomainError(
+            ErrorCode.INVALID_ARGUMENT,
+            "raw_trace_sha256 field contract is 64 lowercase hex characters",
+            {"raw_trace_sha256": value},
+        )
+    return value
+
+
+def _trace_reason_for_match(match: GnssMatch) -> TraceQualityReason:
+    assert match.reason is not None
+    return _GNSS_REASON_MAP[match.reason]
+
+
+def _match_reason_value(match: GnssMatch) -> str:
+    assert match.reason is not None
+    return match.reason.value
 
 
 def _as_monotonic(value: object, field: str) -> MonotonicNs:
@@ -60,7 +107,7 @@ class TraceMetadata:
     actual_interval_s: float | None
     schedule_error_s: float | None
     connection_generation: int
-    raw_trace_sha256: str
+    raw_trace_sha256: str | None
     gnss_match: GnssMatch | None
     quality_status: TraceQualityStatus
     quality_reasons: tuple[TraceQualityReason, ...]
@@ -141,16 +188,25 @@ class TraceMetadata:
                 "connection_generation must be non-negative",
                 {"connection_generation": self.connection_generation},
             )
-        if not isinstance(self.raw_trace_sha256, str) or _RAW_HASH_RE.fullmatch(
-            self.raw_trace_sha256
-        ) is None:
-            raise DomainError(
-                ErrorCode.INVALID_ARGUMENT,
-                "raw_trace_sha256 field contract is 64 lowercase hex characters",
-                {"raw_trace_sha256": self.raw_trace_sha256},
-            )
+        if not isinstance(self.raw_trace_sha256, str) and self.raw_trace_sha256 is not None:
+            raise TypeError("raw_trace_sha256 must be a string or None")
+        hash_value = _require_raw_hash(self.raw_trace_sha256)
+        object.__setattr__(self, "raw_trace_sha256", hash_value)
         if self.gnss_match is not None and not isinstance(self.gnss_match, GnssMatch):
             raise TypeError("gnss_match must be a GnssMatch or None")
+        if self.gnss_match is not None and (
+            self.gnss_match.trace_midpoint_utc != midpoint
+        ):
+            raise DomainError(
+                ErrorCode.GNSS_MIDPOINT_MISMATCH,
+                "gnss match midpoint must equal the sweep midpoint UTC",
+                {
+                    "sweep_midpoint_utc": to_utc_iso(midpoint),
+                    "match_midpoint_utc": to_utc_iso(
+                        self.gnss_match.trace_midpoint_utc
+                    ),
+                },
+            )
         if not isinstance(self.quality_status, TraceQualityStatus):
             raise TypeError("quality_status must be a TraceQualityStatus")
         reasons = tuple(self.quality_reasons)
@@ -163,40 +219,123 @@ class TraceMetadata:
                 ErrorCode.INVALID_ARGUMENT,
                 "missing GNSS requires the explicit gnss_missing quality reason",
             )
+        if self.gnss_match is None:
+            forbidden = [r for r in reasons if r in _GNSS_TRACE_REASONS]
+            if forbidden:
+                raise DomainError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    "no gnss match forbids gnss_no_fix/gnss_stale/"
+                    "gnss_invalid quality reasons",
+                    {"forbidden_reasons": [r.value for r in forbidden]},
+                )
         if self.gnss_match is not None and TraceQualityReason.GNSS_MISSING in reasons:
             raise DomainError(
                 ErrorCode.INVALID_ARGUMENT,
                 "gnss_missing reason contradicts an attached gnss_match",
             )
+        if self.gnss_match is not None:
+            gnss_reasons_present = [
+                r for r in reasons if r in _GNSS_TRACE_REASONS
+            ]
+            if self.gnss_match.usable_for_map and gnss_reasons_present:
+                raise DomainError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    "a map-usable gnss match forbids gnss quality reasons",
+                    {
+                        "forbidden_reasons": [
+                            r.value for r in gnss_reasons_present
+                        ]
+                    },
+                )
+            if not self.gnss_match.usable_for_map:
+                required = _trace_reason_for_match(self.gnss_match)
+                wrong = [r for r in gnss_reasons_present if r is not required]
+                if wrong:
+                    raise DomainError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        "an unusable gnss match allows only its matching "
+                        "quality reason",
+                        {
+                            "match_reason": _match_reason_value(self.gnss_match),
+                            "forbidden_reasons": [r.value for r in wrong],
+                            "required_reason": required.value,
+                        },
+                    )
+                if required not in reasons:
+                    raise DomainError(
+                        ErrorCode.INVALID_ARGUMENT,
+                        "an unusable gnss match requires the matching quality reason",
+                        {
+                            "match_reason": _match_reason_value(self.gnss_match),
+                            "required_reason": required.value,
+                        },
+                    )
         if (not reasons) != (self.quality_status is TraceQualityStatus.NOMINAL):
             raise DomainError(
                 ErrorCode.INVALID_ARGUMENT,
                 "quality reasons must be empty iff status is nominal",
             )
 
+    def with_integrity(self, raw_trace_sha256: str) -> TraceMetadata:
+        """Return a copy with integrity attached (or ``self`` for a no-op).
+
+        - First attach: new object, the original stays acquired (``None``).
+        - Attaching the identical hash again: explicit idempotent no-op.
+        - Attaching a different hash to an already-attached trace: conflict,
+          fails closed with ``ErrorCode.ID_CONFLICT`` and no object is created.
+
+        ``None`` or any non-``str`` argument is strictly rejected at runtime.
+        """
+        if not isinstance(raw_trace_sha256, str):
+            raise TypeError(
+                f"raw_trace_sha256 must be a str, "
+                f"got {type(raw_trace_sha256).__name__}"
+            )
+        validated = _require_raw_hash(raw_trace_sha256)
+        if self.raw_trace_sha256 is None:
+            return replace(self, raw_trace_sha256=validated)
+        if self.raw_trace_sha256 == validated:
+            return self
+        raise DomainError(
+            ErrorCode.ID_CONFLICT,
+            "raw trace hash conflict",
+            {
+                "stored_hash": self.raw_trace_sha256,
+                "incoming_hash": validated,
+            },
+        )
+
     def with_gnss_match(self, match: GnssMatch | None) -> TraceMetadata:
         """Return a copy with the GNSS match attached (or detached).
 
-        Attaching removes ``gnss_missing``; detaching adds it and degrades a
-        nominal status to ``degraded``.  The caller may still need
+        Attaching an unusable match adds the matching structural quality
+        reason (``gnss_no_fix``/``gnss_stale``/``gnss_invalid``) and never
+        summarizes a no-fix/stale/invalid position as ``nominal``; detaching
+        restores ``gnss_missing``.  The caller may still need
         :meth:`with_data_quality` for other quality reasons.
         """
-        reasons = list(self.quality_reasons)
+        reasons: list[TraceQualityReason] = [
+            r
+            for r in self.quality_reasons
+            if r is not TraceQualityReason.GNSS_MISSING
+            and r not in _GNSS_TRACE_REASONS
+        ]
         status = self.quality_status
         if match is None:
-            if TraceQualityReason.GNSS_MISSING not in reasons:
-                reasons.append(TraceQualityReason.GNSS_MISSING)
+            reasons.append(TraceQualityReason.GNSS_MISSING)
             if status is TraceQualityStatus.NOMINAL:
                 status = TraceQualityStatus.DEGRADED
-        else:
-            reasons = [r for r in reasons if r is not TraceQualityReason.GNSS_MISSING]
-            if not reasons:
-                status = TraceQualityStatus.NOMINAL
+        elif not match.usable_for_map:
+            reasons.append(_trace_reason_for_match(match))
+            if status is TraceQualityStatus.NOMINAL:
+                status = TraceQualityStatus.DEGRADED
+        if not reasons:
+            status = TraceQualityStatus.NOMINAL
         return replace(
             self,
             gnss_match=match,
             quality_status=status,
-            quality_reasons=tuple(reasons),
+            quality_reasons=tuple(dict.fromkeys(reasons)),
         )
 
     def with_data_quality(
@@ -234,6 +373,9 @@ class TraceMetadata:
         match_data = data.get("gnss_match")
         if match_data is not None and not isinstance(match_data, dict):
             raise ValueError("gnss_match must be an object or null")
+        hash_data = data.get("raw_trace_sha256")
+        if hash_data is not None and not isinstance(hash_data, str):
+            raise ValueError("raw_trace_sha256 must be a string or null")
         return cls(
             mission_id=MissionId.from_json(_require_str(data["mission_id"], "mission_id")),
             trace_index=_require_int(data["trace_index"]),
@@ -261,7 +403,7 @@ class TraceMetadata:
             actual_interval_s=_optional_float(data.get("actual_interval_s")),
             schedule_error_s=_optional_float(data.get("schedule_error_s")),
             connection_generation=_require_int(data["connection_generation"]),
-            raw_trace_sha256=_require_str(data["raw_trace_sha256"], "raw_trace_sha256"),
+            raw_trace_sha256=hash_data,
             gnss_match=GnssMatch.from_dict(match_data) if match_data is not None else None,
             quality_status=TraceQualityStatus.from_value(
                 _require_str(data["quality_status"], "quality_status")

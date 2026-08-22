@@ -121,13 +121,18 @@ class GnssFix:
                     {"satellites": self.satellites},
                 )
         _require_range(self.hdop, 0.0, _HDOP_MAX, "hdop", high_inclusive=True)
-        if self.ground_speed_mps is not None and not (self.ground_speed_mps >= 0.0):
+        _require_finite_float(self.ground_speed_mps, "ground_speed_mps")
+        if self.ground_speed_mps is not None and self.ground_speed_mps < 0.0:
             raise DomainError(
                 ErrorCode.INVALID_ARGUMENT,
-                "ground_speed_mps must be non-negative",
+                "ground_speed_mps must be finite and non-negative",
                 {"ground_speed_mps": self.ground_speed_mps},
             )
         _require_range(self.course_deg, 0.0, _COURSE_MAX, "course_deg")
+        if not isinstance(self.valid, bool):
+            raise TypeError(
+                f"valid must be a bool, got {type(self.valid).__name__}"
+            )
         if self.valid:
             if lat is None or lon is None:
                 raise DomainError(
@@ -265,6 +270,10 @@ class GnssMatch:
                 f"reason must be a GnssUnavailableReason or None, "
                 f"got {type(self.reason).__name__}"
             )
+        if not isinstance(self.usable_for_map, bool):
+            raise TypeError(
+                f"usable_for_map must be a bool, got {type(self.usable_for_map).__name__}"
+            )
         if self.fix is None:
             if self.reason is None:
                 raise DomainError(
@@ -292,7 +301,8 @@ class GnssMatch:
                     ErrorCode.INVALID_ARGUMENT,
                     "age_s is required when a fix is present",
                 )
-            if not (self.age_s >= 0.0):
+            _require_finite_float(self.age_s, "age_s")
+            if self.age_s < 0.0:
                 raise DomainError(
                     ErrorCode.INVALID_ARGUMENT,
                     "age_s must be non-negative",

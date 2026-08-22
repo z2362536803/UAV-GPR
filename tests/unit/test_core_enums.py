@@ -56,6 +56,9 @@ def test_enum_values_are_stable_lowercase_strings() -> None:
             "device_status",
             "timing_error",
             "unknown",
+            "gnss_no_fix",
+            "gnss_stale",
+            "gnss_invalid",
         },
     }
     for enum_type, values in expected.items():

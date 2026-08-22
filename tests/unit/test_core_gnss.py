@@ -129,6 +129,9 @@ def test_range_validation() -> None:
         {"course_deg": 360.0},
         {"course_deg": -0.1},
         {"ground_speed_mps": -1.0},
+        {"ground_speed_mps": float("nan")},
+        {"ground_speed_mps": float("inf")},
+        {"ground_speed_mps": float("-inf")},
         {"altitude_msl_m": float("nan")},
         {"altitude_msl_m": float("inf")},
     ]
@@ -136,6 +139,23 @@ def test_range_validation() -> None:
         with pytest.raises(DomainError) as excinfo:
             _fix_with(**override)
         assert excinfo.value.code is ErrorCode.INVALID_ARGUMENT
+
+
+def test_float_fields_reject_wrong_types() -> None:
+    for override in (
+        {"ground_speed_mps": "fast"},  # type: ignore[arg-type]
+        {"hdop": "many"},  # type: ignore[arg-type]
+        {"altitude_msl_m": 12},  # int is not a float field value
+    ):
+        with pytest.raises(DomainError):
+            _fix_with(**override)
+
+
+def test_valid_flag_rejects_non_bool() -> None:
+    with pytest.raises(TypeError, match="valid must be a bool"):
+        _fix_with(valid=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="valid must be a bool"):
+        _fix_with(valid="yes")  # type: ignore[arg-type]
 
 
 def test_satellite_count_range() -> None:
@@ -302,4 +322,31 @@ def test_match_consistency_rules() -> None:
             method=GnssMatchMethod.NEAREST_MIDPOINT,
             usable_for_map=False,
             reason=GnssUnavailableReason.STALE,
+        )
+
+
+def test_match_age_s_rejects_non_finite_and_wrong_types() -> None:
+    fix = _valid_fix()
+    for bad_age in (float("nan"), float("inf"), float("-inf"), "old"):
+        with pytest.raises(DomainError):
+            GnssMatch(
+                fix=fix,
+                trace_midpoint_utc=MIDPOINT,
+                age_s=bad_age,  # type: ignore[arg-type]
+                method=GnssMatchMethod.NEAREST_MIDPOINT,
+                usable_for_map=True,
+                reason=None,
+            )
+
+
+def test_usable_for_map_rejects_non_bool() -> None:
+    fix = _valid_fix()
+    with pytest.raises(TypeError, match="usable_for_map must be a bool"):
+        GnssMatch(
+            fix=fix,
+            trace_midpoint_utc=MIDPOINT,
+            age_s=0.1,
+            method=GnssMatchMethod.NEAREST_MIDPOINT,
+            usable_for_map=1,  # type: ignore[arg-type]
+            reason=None,
         )

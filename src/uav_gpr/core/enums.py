@@ -116,9 +116,15 @@ class TraceQualityStatus(StableStrEnum):
 
 
 class TraceQualityReason(StableStrEnum):
-    """Trace-level quality reasons (structural, not display text)."""
+    """Trace-level quality reasons (structural, not display text).
+
+    Values are append-only: existing persisted strings must never be renamed.
+    """
 
     GNSS_MISSING = "gnss_missing"
     DEVICE_STATUS = "device_status"
     TIMING_ERROR = "timing_error"
     UNKNOWN = "unknown"
+    GNSS_NO_FIX = "gnss_no_fix"
+    GNSS_STALE = "gnss_stale"
+    GNSS_INVALID = "gnss_invalid"
