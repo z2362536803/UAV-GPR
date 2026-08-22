@@ -55,6 +55,23 @@
 - 软件/协议/schema 版本；
 - 用户说明、创建 UTC 和规范化配置摘要。
 
+版本契约（fail-closed）：
+
+- `software_version`、`protocol_version`、`config_schema_version` 是稳定版本字符串，全部进入规范化 JSON、SHA256 摘要、`to_dict/from_dict` 与 `ConfigDiff`。
+- 当前支持的 config schema 与 protocol 版本由 `SUPPORTED_CONFIG_SCHEMA_VERSIONS`/`SUPPORTED_PROTOCOL_VERSIONS` 常量定义；未知 config schema 以 `unsupported_schema_version` 拒绝，未知 protocol 版本以 `unsupported_protocol_version` 拒绝。
+- air/ground 传输协议尚未实现；`protocol_version` 仅作为任务配置携带的兼容性契约，不代表 transport 已可用。
+
+规范化与摘要边界：
+
+- 所有浮点字段在构造边界统一规范化：`0.0` 与 `-0.0` 语义等价（规范化为 `0.0`）；NaN/Inf 始终拒绝。
+- 摘要（SHA256）覆盖任务契约字段（扫频、通道、模式、间隔、GNSS 策略、参考、显示时窗与三个版本字段）。`created_utc` 与 `note` 是**描述性字段**：它们随配置对象保存并进入 `to_dict`，但**不**进入规范化摘要与 `ConfigDiff`。因此摘要相等只证明契约字段一致，不证明描述性字段一致。
+
+`ConfigDiff`（requested/applied 字段级差异）严格规则：
+
+- 只允许契约字段；字段唯一；按契约字段规范排序；每个条目必须描述实际变化（requested ≠ applied）。
+- 构造与反序列化均深拷贝隔离（调用方源列表与返回的嵌套值都无法回改差异对象）。
+- `from_dict` 必须校验完整载荷：字段存在性、JSON 安全性、`changed` 与 requested/applied 比较结果的一致性；畸形载荷一律拒绝，不得静默忽略矛盾。
+
 任何影响频率轴、通道、dtype 或物理时窗的改变都必须创建新任务。
 
 ## 5. 单道频域模型

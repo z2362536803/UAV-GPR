@@ -53,6 +53,12 @@ open -> configure(frozen config) -> acquire sweeps -> pause/resume -> stop -> cl
 - `applied_config`：空中端硬件回读/确认配置；
 - `config_diff`：设备量化或拒绝原因。
 
+版本契约与摘要：
+
+- `MissionConfig` 携带 `software_version`、`protocol_version`、`config_schema_version`；当前支持的 config schema 与 protocol 版本由 `SUPPORTED_CONFIG_SCHEMA_VERSIONS`/`SUPPORTED_PROTOCOL_VERSIONS` 常量定义，未知版本在构造/反序列化时 fail-closed（`unsupported_schema_version`/`unsupported_protocol_version`）。`protocol_version` 只是任务配置携带的兼容性契约；air/ground 传输协议本身仍未实现。
+- 配置摘要：规范化 JSON（键排序、紧凑分隔符、列表保序）的 SHA256；浮点字段统一规范化（signed zero → `0.0`；NaN/Inf 拒绝）。摘要覆盖任务契约字段；`created_utc` 与 `note` 是描述性字段，随配置保存但不进入摘要，因此摘要相等不代表描述性字段一致。
+- `config_diff`（`ConfigDiff`）：只包含契约字段、字段唯一、按契约字段规范排序、每个条目必须是实际变化；反序列化校验完整载荷（缺失字段、畸形 JSON 值、`changed` 与实际比较结果的矛盾一律拒绝）；值与嵌套结构深拷贝隔离，外部无法回改。
+
 频率轴以设备实际输出/确认值为准。若实际轴与任务契约超出允许差异，任务在第一道前拒绝；不得采到一半才改变 axis。
 
 ## 5. sweep 完整性

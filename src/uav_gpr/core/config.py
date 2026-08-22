@@ -29,14 +29,29 @@ window: ``display_start_s + display_duration_s <= physical_time_window_s``.
 crop changes return a new ``MissionConfig`` and never modify any raw data.
 
 Canonical JSON and SHA-256 digest cover the mission contract fields only:
-``created_utc`` and ``note`` are descriptive metadata and are excluded, so
-equivalent configurations produce the same digest.  ``to_dict()`` /
-``from_dict()`` serialize the whole object and verify the digest fail-closed
-(``ErrorCode.CONFIG_DIGEST_MISMATCH``).
+``created_utc`` and ``note`` are descriptive metadata (see docs/DATA_MODEL.md
+section 4 and docs/ACQUISITION.md section 4) and are excluded, so equivalent
+configurations produce the same digest.  ``to_dict()`` / ``from_dict()``
+serialize the whole object and verify the digest fail-closed
+(``ErrorCode.CONFIG_DIGEST_MISMATCH``).  Numeric normalization is uniform:
+every float field maps signed zero to ``0.0`` (NaN/Inf stay rejected), so
+``0.0`` and ``-0.0`` are canonically equivalent.
+
+Version contract: ``software_version``, ``protocol_version`` and
+``config_schema_version`` are persisted, stable version strings that enter
+the canonical JSON, the digest, ``to_dict``/``from_dict`` and ``ConfigDiff``.
+Support is gated by :data:`SUPPORTED_CONFIG_SCHEMA_VERSIONS` and
+:data:`SUPPORTED_PROTOCOL_VERSIONS`; unknown values are rejected with
+``unsupported_schema_version`` / ``unsupported_protocol_version``.  The
+transport itself is not implemented yet; ``protocol_version`` only fixes the
+compatibility contract carried by a mission config.
 
 ``ConfigDiff`` is the field-level difference between a requested and an
 applied configuration (docs/ACQUISITION.md section 4): one entry per changed
-contract field, deep-copied and JSON-serializable.
+contract field, deep-copied and JSON-serializable.  Entries are restricted to
+contract fields, unique, canonically ordered and must describe a real change;
+``from_dict`` validates the complete payload (including the consistency of the
+``changed`` flag) and never silently ignores contradictions.
 """
 
 from __future__ import annotations
@@ -44,6 +59,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -71,6 +87,18 @@ from uav_gpr.core.timeutil import ensure_utc, from_utc_iso, to_utc_iso
 
 _FREQ_DTYPE = np.dtype(np.float64)
 
+# Version contract (fail-closed): the config schema and the air/ground
+# protocol versions supported by this codebase.  The protocol transport is
+# not implemented yet; these constants only define what a mission config may
+# carry and which values are rejected.
+SUPPORTED_CONFIG_SCHEMA_VERSION = "1"
+SUPPORTED_PROTOCOL_VERSION = "1"
+SUPPORTED_CONFIG_SCHEMA_VERSIONS = frozenset({SUPPORTED_CONFIG_SCHEMA_VERSION})
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({SUPPORTED_PROTOCOL_VERSION})
+
+# Version-like token: starts alphanumeric, then alphanumeric/._-.
+_VERSION_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
 # Uniform-grid tolerance for explicit axes: relative 1e-9 plus 1 microhertz.
 _UNIFORM_RTOL = 1e-9
 _UNIFORM_ATOL = 1e-6
@@ -79,7 +107,9 @@ _UNIFORM_ATOL = 1e-6
 _WINDOW_RTOL = 1e-9
 _WINDOW_ATOL = 1e-15
 
-# Contract field names (flat, stable, used by the canonical JSON and the diff).
+# Contract field names (flat, stable, used by the canonical JSON and the diff;
+# they must be sorted lexicographically because the canonical order is the
+# contract order).
 _CONTRACT_FIELDS: tuple[str, ...] = (
     "acquisition_mode",
     "apply_background",
@@ -98,6 +128,8 @@ _CONTRACT_FIELDS: tuple[str, ...] = (
     "if_bw_hz",
     "planned_trace_count",
     "power_dbm",
+    "protocol_version",
+    "software_version",
     "target_interval_s",
 )
 
@@ -114,6 +146,10 @@ def _require_float(value: object, field: str) -> float:
             f"{field} must be finite",
             {"field": field},
         )
+    # Canonical numeric normalization: signed zero is one value (0.0); NaN/Inf
+    # are rejected above and never reach the canonical JSON or the digest.
+    if result == 0.0:
+        return 0.0
     return result
 
 
@@ -164,6 +200,27 @@ def _require_bool(value: object, field: str) -> bool:
         raise TypeError(
             f"{field} must be a bool, got {type(value).__name__}"
         )
+    return value
+
+
+def _require_version_token(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(
+            f"{field} must be a str, got {type(value).__name__}"
+        )
+    if _VERSION_TOKEN_RE.fullmatch(value) is None:
+        raise DomainError(
+            ErrorCode.INVALID_ARGUMENT,
+            f"{field} must be a version-like token "
+            "(alphanumeric first, then letters/digits/dot/underscore/hyphen)",
+            {field: value},
+        )
+    return value
+
+
+def _require_json_str(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
     return value
 
 
@@ -218,10 +275,12 @@ class MissionConfig:
     background_reference_id: BackgroundReferenceId | None
     apply_background: bool
     created_utc: datetime
+    software_version: str
+    protocol_version: str = SUPPORTED_PROTOCOL_VERSION
     display_start_s: float = 0.0
     display_duration_s: float | None = None
     note: str | None = None
-    config_schema_version: str = "1"
+    config_schema_version: str = SUPPORTED_CONFIG_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         start = _require_non_negative_float(
@@ -315,9 +374,27 @@ class MissionConfig:
             raise TypeError(
                 f"note must be a str or None, got {type(self.note).__name__}"
             )
-        schema_version = _require_str(
+        software = _require_version_token(
+            self.software_version, "software_version"
+        )
+        protocol = _require_version_token(
+            self.protocol_version, "protocol_version"
+        )
+        if protocol not in SUPPORTED_PROTOCOL_VERSIONS:
+            raise DomainError(
+                ErrorCode.UNSUPPORTED_PROTOCOL_VERSION,
+                "unsupported air/ground protocol version",
+                {"protocol_version": protocol},
+            )
+        schema_version = _require_version_token(
             self.config_schema_version, "config_schema_version"
         )
+        if schema_version not in SUPPORTED_CONFIG_SCHEMA_VERSIONS:
+            raise DomainError(
+                ErrorCode.UNSUPPORTED_SCHEMA_VERSION,
+                "unsupported config schema version",
+                {"config_schema_version": schema_version},
+            )
         created = ensure_utc(self.created_utc)
 
         step = (stop - start) / (points - 1)
@@ -362,6 +439,8 @@ class MissionConfig:
         object.__setattr__(self, "display_start_s", display_start)
         object.__setattr__(self, "display_duration_s", display_duration)
         object.__setattr__(self, "created_utc", created)
+        object.__setattr__(self, "software_version", software)
+        object.__setattr__(self, "protocol_version", protocol)
         object.__setattr__(self, "config_schema_version", schema_version)
 
     @staticmethod
@@ -441,6 +520,8 @@ class MissionConfig:
             "if_bw_hz": self.if_bw_hz,
             "planned_trace_count": self.planned_trace_count,
             "power_dbm": self.power_dbm,
+            "protocol_version": self.protocol_version,
+            "software_version": self.software_version,
             "target_interval_s": self.target_interval_s,
         }
 
@@ -479,6 +560,7 @@ class MissionConfig:
         gnss_max_age_s: float,
         gnss_no_fix_policy: GnssNoFixPolicy,
         created_utc: datetime,
+        software_version: str,
         calibration_profile_id: CalibrationProfileId | None = None,
         apply_calibration: bool = False,
         background_reference_id: BackgroundReferenceId | None = None,
@@ -486,7 +568,8 @@ class MissionConfig:
         display_start_s: float = 0.0,
         display_duration_s: float | None = None,
         note: str | None = None,
-        config_schema_version: str = "1",
+        protocol_version: str = SUPPORTED_PROTOCOL_VERSION,
+        config_schema_version: str = SUPPORTED_CONFIG_SCHEMA_VERSION,
     ) -> MissionConfig:
         """Build a config from an explicit, uniformly spaced frequency axis.
 
@@ -537,6 +620,8 @@ class MissionConfig:
             display_duration_s=display_duration_s,
             created_utc=created_utc,
             note=note,
+            software_version=software_version,
+            protocol_version=protocol_version,
             config_schema_version=config_schema_version,
         )
 
@@ -620,7 +705,13 @@ class MissionConfig:
                 _require_str(data.get("created_utc"), "created_utc")
             ),
             note=_optional_str(data.get("note"), "note"),
-            config_schema_version=_require_str(
+            software_version=_require_json_str(
+                data.get("software_version"), "software_version"
+            ),
+            protocol_version=_require_json_str(
+                data.get("protocol_version"), "protocol_version"
+            ),
+            config_schema_version=_require_json_str(
                 data.get("config_schema_version"), "config_schema_version"
             ),
         )
@@ -682,9 +773,11 @@ def _optional_id(
 class ConfigFieldDiff:
     """One config contract field: requested vs applied values.
 
-    Stored values are deep-copied at construction and every accessor returns a
-    fresh deep copy, so neither the caller's input nor a returned value can
-    ever mutate the diff.
+    Strict value-object rules: the field must be a contract field and the
+    entry must describe an actual change (requested != applied).  Stored
+    values are deep-copied at construction and every accessor returns a fresh
+    deep copy, so neither the caller's input nor a returned value can ever
+    mutate the diff.
     """
 
     field: str
@@ -696,11 +789,17 @@ class ConfigFieldDiff:
     ) -> None:
         if not isinstance(field, str) or not field:
             raise ValueError("diff field must be a non-empty string")
+        if field not in _CONTRACT_FIELDS:
+            raise ValueError(f"unknown diff field: {field!r}")
         _require_json_safe(requested_value, f"$requested_value[{field}]")
         _require_json_safe(applied_value, f"$applied_value[{field}]")
+        requested = cast(JsonValue, _deep_copy_json(requested_value))
+        applied = cast(JsonValue, _deep_copy_json(applied_value))
+        if requested == applied:
+            raise ValueError("a diff entry must describe an actual change")
         object.__setattr__(self, "field", field)
-        object.__setattr__(self, "_requested_value", _deep_copy_json(requested_value))
-        object.__setattr__(self, "_applied_value", _deep_copy_json(applied_value))
+        object.__setattr__(self, "_requested_value", requested)
+        object.__setattr__(self, "_applied_value", applied)
 
     @property
     def requested_value(self) -> JsonValue:
@@ -726,26 +825,62 @@ class ConfigFieldDiff:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> Self:
+        if not isinstance(data, Mapping):
+            raise ValueError("each diff entry must be an object")
         field = data.get("field")
         if not isinstance(field, str) or not field:
             raise ValueError("diff field must be a non-empty string")
-        return cls(
-            field,
-            data.get("requested_value"),  # type: ignore[arg-type]
-            data.get("applied_value"),  # type: ignore[arg-type]
-        )
+        if "requested_value" not in data or "applied_value" not in data:
+            raise ValueError(
+                "diff entry requires requested_value and applied_value"
+            )
+        requested = data["requested_value"]
+        applied = data["applied_value"]
+        try:
+            _require_json_safe(requested, f"$requested_value[{field}]")
+            _require_json_safe(applied, f"$applied_value[{field}]")
+        except TypeError as error:
+            raise ValueError(f"diff entry values must be JSON safe: {error}") from None
+        changed = data.get("changed")
+        if not isinstance(changed, bool):
+            raise ValueError("diff entry 'changed' must be a boolean")
+        values_equal = requested == applied
+        if changed == values_equal:
+            raise ValueError(
+                "diff entry 'changed' flag contradicts requested/applied values"
+            )
+        return cls(field, cast(JsonValue, requested), cast(JsonValue, applied))
 
 
 @dataclass(frozen=True, slots=True)
 class ConfigDiff:
     """Field-level difference between requested and applied configurations.
 
-    Only changed contract fields are stored (docs/ACQUISITION.md section 4:
-    device quantization or rejection reasons surface here); unchanged fields
-    never appear.
+    Strict value-object rules: only contract fields, at most one entry per
+    field, canonically ordered and each entry describing a real change
+    (docs/ACQUISITION.md section 4: device quantization or rejection reasons
+    surface here).  Unchanged fields never appear; ``compute()`` builds the
+    diff in canonical contract order.
     """
 
     fields: tuple[ConfigFieldDiff, ...]
+
+    def __post_init__(self) -> None:
+        fields = tuple(self.fields)
+        for entry in fields:
+            if not isinstance(entry, ConfigFieldDiff):
+                raise TypeError(
+                    "diff entries must be ConfigFieldDiff, "
+                    f"got {type(entry).__name__}"
+                )
+            if entry.field not in _CONTRACT_FIELDS:
+                raise ValueError(f"unknown diff field: {entry.field!r}")
+        names = [entry.field for entry in fields]
+        if len(set(names)) != len(names):
+            raise ValueError("diff fields must be unique")
+        if names != sorted(names):
+            raise ValueError("diff fields must appear in canonical contract order")
+        object.__setattr__(self, "fields", fields)
 
     @classmethod
     def compute(cls, requested: MissionConfig, applied: MissionConfig) -> ConfigDiff:

@@ -68,6 +68,7 @@ def make_config(**overrides: object) -> MissionConfig:
         display_duration_s=None,
         created_utc=CREATED_UTC,
         note="field test",
+        software_version="0.1.0.dev0",
     )
     base.update(overrides)
     return MissionConfig(**base)
@@ -158,6 +159,7 @@ def test_from_frequency_axis_matches_explicit_construction() -> None:
         display_duration_s=None,
         created_utc=CREATED_UTC,
         note="field test",
+        software_version="0.1.0.dev0",
     )
     assert via_axis == explicit
     assert via_axis.config_sha256 == explicit.config_sha256
@@ -198,6 +200,7 @@ def make_from_axis(axis: object) -> MissionConfig:
         gnss_max_age_s=2.0,
         gnss_no_fix_policy=GnssNoFixPolicy.RECORD_WITHOUT_POSITION,
         created_utc=CREATED_UTC,
+        software_version="0.1.0.dev0",
     )
 
 
@@ -423,3 +426,256 @@ def test_config_field_diff_accessor_and_changed_property() -> None:
         "applied_value": 0.5,
         "changed": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Version contract: fail-closed on unknown schema/protocol
+# ---------------------------------------------------------------------------
+
+
+def test_version_fields_are_persisted_and_round_trip() -> None:
+    config = make_config(software_version="0.2.0")
+    payload = config.to_dict()
+    assert payload["software_version"] == "0.2.0"
+    assert payload["protocol_version"] == "1"
+    assert payload["config_schema_version"] == "1"
+    restored = MissionConfig.from_dict(payload)
+    assert restored == config
+    assert restored.software_version == "0.2.0"
+    assert restored.protocol_version == "1"
+    assert restored.config_schema_version == "1"
+
+
+def test_versions_enter_digest_and_diff() -> None:
+    a = make_config(software_version="0.1.0.dev0")
+    b = make_config(software_version="0.2.0")
+    assert a.config_sha256 != b.config_sha256
+    diff = ConfigDiff.compute(a, b)
+    assert diff.changed_fields == ("software_version",)
+    entry = diff.field("software_version")
+    assert entry is not None
+    assert entry.requested_value == "0.1.0.dev0"
+    assert entry.applied_value == "0.2.0"
+
+
+def test_unknown_schema_version_is_rejected() -> None:
+    with pytest.raises(DomainError) as excinfo:
+        make_config(config_schema_version="2")
+    assert excinfo.value.code is ErrorCode.UNSUPPORTED_SCHEMA_VERSION
+    payload = make_config().to_dict()
+    payload["config_schema_version"] = "99"
+    with pytest.raises(DomainError) as excinfo:
+        MissionConfig.from_dict(payload)
+    assert excinfo.value.code is ErrorCode.UNSUPPORTED_SCHEMA_VERSION
+
+
+def test_unknown_protocol_version_is_rejected() -> None:
+    with pytest.raises(DomainError) as excinfo:
+        make_config(protocol_version="2")
+    assert excinfo.value.code is ErrorCode.UNSUPPORTED_PROTOCOL_VERSION
+
+
+def test_version_fields_missing_or_wrong_type_are_rejected() -> None:
+    payload = make_config().to_dict()
+    del payload["software_version"]
+    with pytest.raises(ValueError):
+        MissionConfig.from_dict(payload)
+    payload = make_config().to_dict()
+    del payload["protocol_version"]
+    with pytest.raises(ValueError):
+        MissionConfig.from_dict(payload)
+    bad = make_config().to_dict()
+    bad["software_version"] = 5
+    with pytest.raises(ValueError):
+        MissionConfig.from_dict(bad)
+    with pytest.raises(TypeError):
+        make_config(software_version=5)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        make_config(protocol_version=None)  # type: ignore[arg-type]
+    with pytest.raises(DomainError):
+        make_config(software_version="bad version")
+
+
+# ---------------------------------------------------------------------------
+# Canonical numeric normalization: signed zero
+# ---------------------------------------------------------------------------
+
+
+def test_signed_zero_is_canonically_equivalent() -> None:
+    positive = make_config(frequency_start_hz=0.0, power_dbm=0.0, display_start_s=0.0)
+    negative = make_config(
+        frequency_start_hz=-0.0, power_dbm=-0.0, display_start_s=-0.0
+    )
+    assert positive.to_canonical_json() == negative.to_canonical_json()
+    assert positive.config_sha256 == negative.config_sha256
+    assert positive.frequency_start_hz == 0.0
+    assert positive.power_dbm == 0.0
+    assert positive.display_start_s == 0.0
+    # Other nonzero fields keep exact sign-normalized values.
+    config = make_config(power_dbm=-10.0)
+    assert config.to_dict()["power_dbm"] == -10.0
+
+
+def test_nan_and_inf_are_still_rejected_after_normalization() -> None:
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(DomainError):
+            make_config(power_dbm=bad)
+        with pytest.raises(DomainError):
+            make_config(display_start_s=bad)
+
+
+# ---------------------------------------------------------------------------
+# ConfigDiff strict value-object rules
+# ---------------------------------------------------------------------------
+
+
+def _diff_entry(
+    field: str, requested: object, applied: object, changed: bool
+) -> dict[str, object]:
+    return {
+        "field": field,
+        "requested_value": requested,
+        "applied_value": applied,
+        "changed": changed,
+    }
+
+
+def test_config_diff_from_dict_source_list_is_isolated() -> None:
+    source = [_diff_entry("power_dbm", -10.0, -15.0, True)]
+    diff = ConfigDiff.from_dict({"fields": source})
+    source[0]["requested_value"] = 999.0
+    source[0]["applied_value"] = -999.0
+    assert isinstance(diff.fields, tuple)
+    assert diff.fields[0].requested_value == -10.0
+    assert diff.fields[0].applied_value == -15.0
+    assert diff.changed_fields == ("power_dbm",)
+
+
+def test_config_diff_normalizes_fields_to_tuple() -> None:
+    entries = [ConfigFieldDiff("power_dbm", -10.0, -15.0)]
+    diff = ConfigDiff(fields=entries)
+    assert isinstance(diff.fields, tuple)
+    entries.append(ConfigFieldDiff("target_interval_s", 0.25, 0.5))
+    assert diff.changed_fields == ("power_dbm",)
+
+
+def test_config_diff_rejects_unknown_field() -> None:
+    with pytest.raises(ValueError):
+        ConfigFieldDiff("bogus_field", 1.0, 2.0)
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict({"fields": [_diff_entry("bogus", 1, 2, True)]})
+
+
+def test_config_diff_rejects_duplicate_fields() -> None:
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {
+                "fields": [
+                    _diff_entry("power_dbm", -10.0, -15.0, True),
+                    _diff_entry("power_dbm", -10.0, -20.0, True),
+                ]
+            }
+        )
+
+
+def test_config_diff_rejects_non_canonical_order() -> None:
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {
+                "fields": [
+                    _diff_entry("target_interval_s", 0.25, 0.5, True),
+                    _diff_entry("power_dbm", -10.0, -15.0, True),
+                ]
+            }
+        )
+
+
+def test_config_diff_rejects_unchanged_entry() -> None:
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {"fields": [_diff_entry("power_dbm", -10.0, -10.0, False)]}
+        )
+    with pytest.raises(ValueError):
+        ConfigFieldDiff("power_dbm", -10.0, -10.0)
+
+
+def test_config_diff_rejects_contradictory_changed_flag() -> None:
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {"fields": [_diff_entry("power_dbm", -10.0, -15.0, False)]}
+        )
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {"fields": [_diff_entry("power_dbm", -10.0, -10.0, True)]}
+        )
+
+
+def test_config_diff_rejects_missing_fields_and_malformed_payload() -> None:
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {
+                "fields": [
+                    {
+                        "field": "power_dbm",
+                        "applied_value": -15.0,
+                        "changed": True,
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {
+                "fields": [
+                    {
+                        "field": "power_dbm",
+                        "requested_value": -10.0,
+                        "changed": True,
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {
+                "fields": [
+                    {
+                        "field": "power_dbm",
+                        "requested_value": -10.0,
+                        "applied_value": -15.0,
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict(
+            {
+                "fields": [
+                    {
+                        "field": "power_dbm",
+                        "requested_value": -10.0,
+                        "applied_value": -15.0,
+                        "changed": "yes",
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict({"fields": ["not-an-entry"]})
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict({})
+    with pytest.raises(ValueError):
+        ConfigDiff.from_dict({"fields": "nope"})
+
+
+def test_config_diff_rejects_non_json_diff_values() -> None:
+    with pytest.raises(TypeError):
+        ConfigFieldDiff("power_dbm", b"bytes", -15.0)  # type: ignore[arg-type]
+
+
+def test_config_diff_multiple_changes_are_canonically_ordered() -> None:
+    a = make_config()
+    b = make_config(target_interval_s=0.5, power_dbm=-15.0)
+    diff = ConfigDiff.compute(a, b)
+    assert diff.changed_fields == ("power_dbm", "target_interval_s")
+    assert [entry.field for entry in diff.fields] == sorted(diff.changed_fields)
