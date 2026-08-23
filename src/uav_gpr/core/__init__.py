@@ -1,16 +1,21 @@
 """UAV-GPR shared core: identifiers, stable enums, structured errors, time."""
 
 from uav_gpr.core.channels import ChannelSpec
+from uav_gpr.core.config import ConfigDiff, ConfigFieldDiff, MissionConfig
 from uav_gpr.core.enums import (
+    AcquisitionMode,
+    DataDomain,
     EndpointRole,
     GnssFixQuality,
     GnssMatchMethod,
+    GnssNoFixPolicy,
     GnssStatus,
     GnssUnavailableReason,
     LogicalPolarization,
     MissionTerminalState,
     SParameter,
     StableStrEnum,
+    TimeDomainKind,
     TraceQualityReason,
     TraceQualityStatus,
 )
@@ -28,6 +33,7 @@ from uav_gpr.core.identifiers import (
     TraceUid,
 )
 from uav_gpr.core.metadata import TraceMetadata
+from uav_gpr.core.time_domain import ProcessingHistory, ProcessingRecord, TimeDomainScan
 from uav_gpr.core.timeutil import (
     Clock,
     ManualClock,
@@ -40,12 +46,16 @@ from uav_gpr.core.timeutil import (
 )
 
 __all__ = [
+    "AcquisitionMode",
     "AirFileId",
     "BackgroundReferenceId",
     "CalibrationProfileId",
     "ChannelSpec",
     "Clock",
     "CommandId",
+    "ConfigDiff",
+    "ConfigFieldDiff",
+    "DataDomain",
     "DeviceId",
     "DomainError",
     "EndpointRole",
@@ -56,17 +66,23 @@ __all__ = [
     "GnssFixQuality",
     "GnssMatch",
     "GnssMatchMethod",
+    "GnssNoFixPolicy",
     "GnssStatus",
     "GnssUnavailableReason",
     "GroundFileId",
     "LogicalPolarization",
     "ManualClock",
+    "MissionConfig",
     "MissionId",
     "MissionTerminalState",
     "MonotonicNs",
+    "ProcessingHistory",
+    "ProcessingRecord",
     "SParameter",
     "StableStrEnum",
     "SystemClock",
+    "TimeDomainKind",
+    "TimeDomainScan",
     "TraceMetadata",
     "TraceQualityReason",
     "TraceQualityStatus",

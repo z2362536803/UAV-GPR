@@ -128,3 +128,57 @@ class TraceQualityReason(StableStrEnum):
     GNSS_NO_FIX = "gnss_no_fix"
     GNSS_STALE = "gnss_stale"
     GNSS_INVALID = "gnss_invalid"
+
+
+class AcquisitionMode(StableStrEnum):
+    """Mission acquisition mode: a fixed planned trace count or continuous.
+
+    ``fixed_count`` requires ``planned_trace_count``; ``continuous`` requires
+    it to be ``None`` (the mission runs until explicitly stopped).
+    """
+
+    FIXED_COUNT = "fixed_count"
+    CONTINUOUS = "continuous"
+
+
+class GnssNoFixPolicy(StableStrEnum):
+    """Mission policy when no usable GNSS fix is available for a trace.
+
+    - ``record_without_position``: the trace is still recorded; its position
+      stays explicitly empty with a structured reason (never a fabricated 0/0).
+    - ``abort_task``: the mission fails closed and stops.
+    """
+
+    RECORD_WITHOUT_POSITION = "record_without_position"
+    ABORT_TASK = "abort_task"
+
+
+class DataDomain(StableStrEnum):
+    """Immutable data-domain identifiers for processing provenance.
+
+    Frequency domains cover ``frequency_raw`` and every derived frequency
+    representation; time domains identify ``time_base`` (IFFT output) and
+    ``time_processed`` (after time-domain stages).  ``frequency_raw`` is only
+    ever an input (never a processing output); ``frequency_filtered`` is the
+    output domain of the frequency bandpass stage.  A ``ProcessingRecord``
+    links input and output domains; a ``TimeDomainScan`` must end its history
+    in the domain matching its ``kind``.
+    """
+
+    FREQUENCY_RAW = "frequency_raw"
+    FREQUENCY_CALIBRATED = "frequency_calibrated"
+    FREQUENCY_BACKGROUND_APPLIED = "frequency_background_applied"
+    FREQUENCY_FILTERED = "frequency_filtered"
+    TIME_BASE = "time_base"
+    TIME_PROCESSED = "time_processed"
+
+
+class TimeDomainKind(StableStrEnum):
+    """Time-domain scan kind: calibrated base vs processed representation.
+
+    ``time_base`` is the IFFT output; ``time_processed`` exists only when a
+    time-domain stage produced it and requires a matching provenance record.
+    """
+
+    TIME_BASE = "time_base"
+    TIME_PROCESSED = "time_processed"
