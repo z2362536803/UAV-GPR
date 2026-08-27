@@ -4,7 +4,7 @@
 
 ## ISSUE-008：冻结 `.rcscan` v2 物理 schema 与 codec
 
-- 状态：Planned
+- 状态：Done（2026-08-27 独立审查 PASS WITH CONDITIONS 后经项目负责人授权合并，见 [docs/reports/ISSUE_008_REVIEW_REPORT.md](../reports/ISSUE_008_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-004～007
 - 映射：FR-010、ADR-0002
 
