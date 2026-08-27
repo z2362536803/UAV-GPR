@@ -1,0 +1,581 @@
+{
+  "format_name": "rcscan",
+  "schema_version": 2,
+  "profile": "uav_gpr",
+  "channel_count": 2,
+  "frequency_points": 16,
+  "time_points": 16,
+  "datasets": [
+    {
+      "path": "/mission/config_json",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [],
+      "maxshape": [],
+      "chunks": null,
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/channels/definitions_json",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [1],
+      "maxshape": [1],
+      "chunks": null,
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/axes/frequencies_hz",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [16],
+      "maxshape": [16],
+      "chunks": null,
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/frequency/raw",
+      "kind": "numeric",
+      "dtype": "<c16",
+      "initial_shape": [0, 2, 16],
+      "maxshape": [null, 2, 16],
+      "chunks": [1, 2, 16],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/trace_index",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/trace_uid",
+      "kind": "ascii_fixed",
+      "dtype": "ascii:36",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/sweep_started_utc_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/sweep_midpoint_utc_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/sweep_finished_utc_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/sweep_started_monotonic_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/sweep_midpoint_monotonic_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/sweep_finished_monotonic_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/target_interval_s",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/actual_interval_s",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/schedule_error_s",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/connection_generation",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/timing_present_mask",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/raw_trace_sha256",
+      "kind": "ascii_fixed",
+      "dtype": "ascii:64",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/quality_status",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/trace_metadata/quality_reasons",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/valid",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/invalid_reason",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/received_utc_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/nmea_utc_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/latitude_deg",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/longitude_deg",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/altitude_msl_m",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/geoid_separation_m",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/fix_type",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/satellites",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/hdop",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/ground_speed_mps",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/course_deg",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/optional_present_mask",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/match_age_s",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/raw_nmea",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/received_monotonic_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/match_usable",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/match_method",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/gnss/match_reason",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/acquisition/device_status_json",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/acquisition/quality_flags",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/transport/sent_utc_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air"],
+      "optional_for": ["ground"]
+    },
+    {
+      "path": "/transport/ack_utc_ns",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air"],
+      "optional_for": ["ground"]
+    },
+    {
+      "path": "/transport/retry_count",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air"],
+      "optional_for": ["ground"]
+    },
+    {
+      "path": "/transport/receive_status",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [0],
+      "maxshape": [null],
+      "chunks": [1],
+      "compression": null,
+      "required_for": ["air"],
+      "optional_for": ["ground"]
+    },
+    {
+      "path": "/checkpoints/committed_record_count",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [1],
+      "maxshape": [1],
+      "chunks": null,
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/checkpoints/last_trace_index",
+      "kind": "numeric",
+      "dtype": "<i8",
+      "initial_shape": [1],
+      "maxshape": [1],
+      "chunks": null,
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/checkpoints/updated_utc",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [1],
+      "maxshape": [1],
+      "chunks": null,
+      "compression": null,
+      "required_for": ["air", "ground"]
+    },
+    {
+      "path": "/axes/time_base_s",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [16],
+      "maxshape": [16],
+      "chunks": null,
+      "compression": null,
+      "required_for": [],
+      "optional_for": ["air", "ground"]
+    },
+    {
+      "path": "/axes/time_processed_s",
+      "kind": "numeric",
+      "dtype": "<f8",
+      "initial_shape": [16],
+      "maxshape": [16],
+      "chunks": null,
+      "compression": null,
+      "required_for": [],
+      "optional_for": ["air", "ground"]
+    },
+    {
+      "path": "/frequency/calibrated",
+      "kind": "numeric",
+      "dtype": "<c16",
+      "initial_shape": [0, 2, 16],
+      "maxshape": [null, 2, 16],
+      "chunks": [1, 2, 16],
+      "compression": null,
+      "required_for": [],
+      "optional_for": ["air", "ground"]
+    },
+    {
+      "path": "/time_base/data",
+      "kind": "numeric",
+      "dtype": "<c16",
+      "initial_shape": [0, 2, 16],
+      "maxshape": [null, 2, 16],
+      "chunks": [1, 2, 16],
+      "compression": null,
+      "required_for": [],
+      "optional_for": ["air", "ground"]
+    },
+    {
+      "path": "/time_base/history_json",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [1],
+      "maxshape": [1],
+      "chunks": null,
+      "compression": null,
+      "required_for": [],
+      "optional_for": ["air", "ground"]
+    },
+    {
+      "path": "/time_processed/data",
+      "kind": "numeric",
+      "dtype": "<c16",
+      "initial_shape": [0, 2, 16],
+      "maxshape": [null, 2, 16],
+      "chunks": [1, 2, 16],
+      "compression": null,
+      "required_for": [],
+      "optional_for": ["air", "ground"]
+    },
+    {
+      "path": "/time_processed/history_json",
+      "kind": "vlen_utf8",
+      "dtype": "utf8",
+      "initial_shape": [1],
+      "maxshape": [1],
+      "chunks": null,
+      "compression": null,
+      "required_for": [],
+      "optional_for": ["air", "ground"]
+    }
+  ]
+}
