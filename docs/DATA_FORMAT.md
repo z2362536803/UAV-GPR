@@ -99,6 +99,36 @@ profile = "uav_gpr"
 
 最终实现可在不改变语义的前提下选择 HDF5 属性、定长字符串或列式数据集；任何具体 dtype/chunk 变化必须通过 schema 契约测试固定。
 
+### 2.1 物理 schema 冻结（ISSUE-008）
+
+ISSUE-008 把本节逻辑结构落实为如下物理契约定：
+
+- 根属性：`format_name="rcscan"`、`schema_version=2`、`profile="uav_gpr"`、
+  `file_id`、`file_role="air|ground"`、`writer_version`、`lifecycle_state`。
+  `file_role=air` 必须存在 `/transport`；ground 端 `/transport` 为 role-specific
+  optional：ground 文件可无该组，也可有同结构该组；若存在，`probe` 必须按冻结
+  结构校验。ground 侧各列（receive/ACK/retry/receive_status）语义留待
+  ISSUE-041/043 定义，本 Issue 只冻结物理结构。
+- 数值列统一使用 little-endian：频率 `float64`、raw 复数 `complex128`、
+  时间戳/计数 `int64`；浮点缺失用 NaN，并配显式 `valid` 布尔列；
+  int64 缺失使用 `INT64_MIN`；变长文本用 UTF-8 vlen 字符串，
+  `trace_uid` 固定 36 字节 ASCII、`raw_trace_sha256` 固定 64 字节 ASCII。
+- `/frequency/raw` 为 trace-major 可扩展第一维，`shape=(0, c, f)`、
+  `maxshape=(None, c, f)`、chunk `(1, c, f)`，暂不压缩（留待基准）；
+  物理行是提交顺序，不等于 `trace_index`。
+- `time_base`、`time_processed`、`frequency/calibrated`、`axes/time_*` 由
+  后续处理阶段显式创建，初始骨架不创建。
+- 逐道持久化为显式 trace-major 列：含
+  `/gnss/received_monotonic_ns`、`match_method/usable/reason`、
+  `/trace_metadata/quality_status/quality_reasons` 与 field-level
+  presence bitmask。纯 projection codec
+  `trace_metadata_to_cells()` / `trace_metadata_from_cells()` 是单一权威
+  表示（single source of truth），不保留冗余 JSON row；写入与读取必须
+  只通过该 codec 生成/重建物理行。
+- 权威契约：`src/uav_gpr/storage/rcscan_v2.py`（常量/codec/创建器/probe）、
+  `tests/contract/rcscan_v2_golden.json`（独立黄金 manifest）与
+  `tests/contract/test_storage_schema.py`（黄金结构、哨兵、fail-closed 测试）。
+
 ## 3. 增量写入
 
 - `frequency/raw` 使用 trace-major、可扩展第一维，建议 chunk `(1, channel_count, frequency_count)`；压缩算法需通过 CPU/写盘基准选择。
