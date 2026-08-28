@@ -171,6 +171,48 @@ create <file_id>.partial.rcscan
 
 哈希函数的确切 framing 必须在实现前写成契约样本，避免简单拼接的歧义。GNSS 不放入 raw hash，以便定位字段补正时不改变雷达原始数据身份；GNSS 自身可以有独立记录哈希。
 
+### 5.1 精确 framing（ISSUE-009 冻结）
+
+`raw_trace_sha256` 是下列字节流的一次 `SHA-256`（输出 64 位小写 hex）：
+
+```text
+raw_trace_sha256 = sha256(
+    "UAVGPR-RAW-SHA256"             # 魔数（ASCII，无长度前缀，固定 17 字节）
+    + uint64be(1)                   # 哈希版本 RAW_HASH_VERSION = 1
+    + uint64be(len) + mission_id    # UTF-8，长度前缀
+    + uint64be(len) + trace_uid     # UTF-8，长度前缀
+    + uint64be(trace_index)         # 任务内单调道序号，固定宽度
+    + uint64be(channel_count)
+    + 每通道按序: uint64be(len) + channel_id   # UTF-8，长度前缀，顺序=channels 显式顺序
+    + uint64be(frequency_count)
+    + float64le(频率轴)              # 连续字节，C 序，little-endian
+    + complex128le(raw)             # 连续字节，C 序（channel × frequency），little-endian
+)
+```
+
+编码规则：
+
+- **整数**：所有框架整数（版本、长度、`trace_index`、`channel_count`、`frequency_count`）统一为无符号 64 位大端（`uint64be`）；数值载荷（频率轴、raw）统一为 little-endian，与 ISSUE-008 冻结的 HDF5 `<f8`/`<c16` 列布局一致。
+- **变长文本**：`mission_id`、`trace_uid`、`channel_id` 均以 `uint64be(len)` 长度前缀 + UTF-8 字节；`mission_id`/`trace_uid` 为规范小写 UUID 字符串，`channel_id` 遵循 `^[A-Za-z0-9_]+$`。长度前缀消除简单拼接的歧义（`"ab"+"c"` 与 `"a"+"bc"` 不可再坍缩为同一输入）。
+- **数组规范化**：频率轴先规范为 little-endian float64，再在**规范值上**校验有限与严格递增，随后取连续字节；raw 按 `channel × frequency` 二维、复数值校验后取 C-order little-endian `complex128` 连续字节。实现只读输入，绝不修改领域数组（`astype(copy=False)` 在 dtype 已匹配时零拷贝）。校验必须作用于最终参与哈希的规范值，禁止在原始 dtype 上判定（无符号 `np.diff` 下溢、有符号极值溢出、转换后相邻值坍缩均不得绕过 fail-closed）。
+- **通道顺序**：channel ID 按 `channels` 显式元组顺序逐个 framing，禁止按字典/窗口顺序推断。
+- **GNSS 排除**：GNSS 字段（含 `GnssMatch` 全部内容）永不进入 raw hash；定位字段补正不改变雷达原始数据身份。GNSS 自身的独立记录哈希不在本 framing 内定义。
+- **版本演进**：`RAW_HASH_VERSION = 1` 作为 framing 第一个字段；任何 framing 语义变化必须递增版本，禁止在同一版本内静默改变字节布局。
+- **RawHashSpec JSON**：`RawHashSpec.to_dict()` 顶层携带 `spec_version`（JSON schema 版本）与 `hash_version`（framing 版本，当前均为 1）；`from_dict()` 只接受 v1，拒绝未知/缺失/错误类型版本字段，并冻结顶层与 channel 子对象的精确键集（未知/缺失键拒绝），防止损坏或未来版本 payload 被静默降级解释。
+
+fail-closed 校验（任一违反即拒绝，结构化 `DomainError`）：
+
+- 非规范 `mission_id`/`trace_uid`：非字符串类型 → `invalid_argument`；非规范 UUID 字符串（大写、缺横线、非法字符）→ `invalid_uuid`；
+- `trace_index` 为负数或非 `int`（含 `bool`）→ `invalid_argument`；超过 `2**63 - 1` → `out_of_range`（上界与 ISSUE-008 `<i8` 存储列对齐，framing 内仍按 `uint64be` 编码）；
+- channels 为空或 channel_id 重复 → `invalid_argument`/`duplicate_channel`；
+- 频率轴非一维/空/非有限/非严格递增（在规范 `<f8` 值上判定）→ `axis_mismatch`/`invalid_argument`/`non_finite_axis`/`non_increasing_axis`；
+- raw 非二维/非数值 dtype/shape 与 channels×频率不匹配 → `dtype_mismatch`/`shape_mismatch`。
+
+权威契约：`src/uav_gpr/core/raw_hash.py`（常量/framing/校验/`RawHashSpec`）、
+`tests/contract/raw_trace_hash_golden.json`（独立黄金向量，含 expected SHA256 与生成参数）与
+`tests/contract/test_raw_trace_hash.py`（黄金对拍、等价布局/字节序、变化敏感、歧义消除、
+fail-closed、GNSS 排除、输入不可变、ISSUE-008 列契约兼容）。
+
 ## 6. 空地文件差异
 
 空中端和地面端文件不要求整文件相同：

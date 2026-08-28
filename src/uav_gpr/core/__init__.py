@@ -33,6 +33,13 @@ from uav_gpr.core.identifiers import (
     TraceUid,
 )
 from uav_gpr.core.metadata import TraceMetadata
+from uav_gpr.core.raw_hash import (
+    RAW_HASH_MAGIC,
+    RAW_HASH_VERSION,
+    RawHashSpec,
+    compute_raw_trace_sha256,
+    validate_raw_hash,
+)
 from uav_gpr.core.time_domain import ProcessingHistory, ProcessingRecord, TimeDomainScan
 from uav_gpr.core.timeutil import (
     Clock,
@@ -46,6 +53,8 @@ from uav_gpr.core.timeutil import (
 )
 
 __all__ = [
+    "RAW_HASH_MAGIC",
+    "RAW_HASH_VERSION",
     "AcquisitionMode",
     "AirFileId",
     "BackgroundReferenceId",
@@ -78,6 +87,7 @@ __all__ = [
     "MonotonicNs",
     "ProcessingHistory",
     "ProcessingRecord",
+    "RawHashSpec",
     "SParameter",
     "StableStrEnum",
     "SystemClock",
@@ -87,8 +97,10 @@ __all__ = [
     "TraceQualityReason",
     "TraceQualityStatus",
     "TraceUid",
+    "compute_raw_trace_sha256",
     "ensure_utc",
     "from_utc_iso",
     "to_utc_iso",
     "utc_now",
+    "validate_raw_hash",
 ]
