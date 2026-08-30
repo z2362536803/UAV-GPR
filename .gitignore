@@ -53,3 +53,6 @@ logs/
 reports/generated/
 docs/reports/generated/
 *.log
+
+# Agent team runtime state
+.agent-teams/
