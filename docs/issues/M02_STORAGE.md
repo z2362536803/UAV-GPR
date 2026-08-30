@@ -78,7 +78,7 @@
 
 ## ISSUE-010：增量 writer、checkpoint 与原子 finalize
 
-- 状态：Planned
+- 状态：Review（round 2 最小修复完成，等待独立复审；仅人工验收后置 Done）
 - 直接依赖：ISSUE-008、009
 - 映射：FR-007、008、010、ADR-0004
 
