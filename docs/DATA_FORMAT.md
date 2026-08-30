@@ -139,6 +139,19 @@ ISSUE-008 把本节逻辑结构落实为如下物理契约定：
 - 任务参数冻结后 axes/channel 不再改变；不兼容 sweep 必须拒绝并停止任务。
 - writer 进程内只有一个所有者；其他线程通过有界命令队列提交不可变对象。
 
+### 3.1 reader 契约（ISSUE-011 冻结）
+
+只读 `RcScanReader`/`RcScanValidator` 的契约（权威实现：`src/uav_gpr/storage/rcscan_reader.py`；契约测试：`tests/contract/test_rcscan_reader.py`）：
+
+- **打开即校验，fail-closed**：`format_name`/`schema_version`/`profile`/`file_role`/`lifecycle_state` 由 ISSUE-008 probe 校验；每个已存在数据集按冻结契约核 dtype/maxshape/chunks/compression/固定轴长度；必需数据集缺失拒绝（`/transport` 对 ground 文件为 optional）；mission config、channel definitions、频率轴与 config digest 必须互相一致；checkpoint（`committed_record_count ∈ [0, 最短必需列长度]`、`last_trace_index`、`updated_utc`）必须合法；未知 schema 版本/profile 拒绝。可选 processed 组（`time_base`/`time_processed`/`calibrated`）缺失合法，存在则与其他数据集同样校验。
+- **可见窗口**：只暴露 `物理行号 < committed_record_count` 且必需列完整、行解码成功的记录；半写尾部（checkpoint 之后的行）不可见。列长度短于 checkpoint 视为损坏，打开即拒绝；列长于 checkpoint 的半写尾部以 `physical_record_count` 计数呈现但不可读。
+- **双视图**：物理视图按提交顺序（`iter_physical`）；逻辑视图按显式 `trace_index` 排序（`iter_logical`/`trace_by_index`，平局按提交位置）。乱序补传在逻辑视图正确排序；物理行永不等于 `trace_index`。
+- **重复与冲突**：同 index + 同 uid + 同 hash 多副本 = 重复，逻辑视图只服务首个提交位置（确定性），物理视图全部呈现；同 index 不同 hash 或同 uid 不同 index = 冲突——逻辑视图**排除**该身份（绝不静默选一份），`trace_by_index` 对冲突索引抛 `DomainError(ID_CONFLICT)`，`ConflictTrace` 保留全部证据（positions/hashes/uids）。缺道 = `[0, max 已解码 trace_index]` 区间内的空洞，不按 `planned_trace_count` 推测。
+- **报告**：`ValidationReport` 可序列化，分类缺道（`MissingTrace`）/重复（`DuplicateTrace`）/冲突（`ConflictTrace`）/逐行 issue（`RowIssue`：缺存储 hash、hash 不一致、行解码失败）；行解码只走 ISSUE-008 权威 codec `trace_metadata_from_cells`。
+- **哈希**：`raw_trace_sha256` 列按 64 位小写 hex 校验；reader 重算哈希时，HDF5 `<i8` 列回读的 `trace_index` 必须先 `int()` 再进入 ISSUE-009 framing。缺存储 hash 的行呈现 `raw_trace_sha256=""`、`hash_verified=False` 并进入报告——消费方（ISSUE-012/014）以 `hash_verified`/`report.issues` 为权威，不能只看字段值。
+- **生命周期呈现**：`lifecycle_state` 原样呈现；finalized/recovered 但仍名 `*.partial.rcscan`（ISSUE-010 `awaiting_rename` 状态）→ `rename_pending=True`，按已完成任务读取（completion_kind 原样），绝不误判为 `writing` 未完成任务；完整恢复识别与处置属 ISSUE-012。
+- **只读保证**：reader 以 `"r"` 模式打开，不修复、不迁移、不处理，读取前后文件字节不变。
+
 ## 4. 文件生命周期
 
 ```text

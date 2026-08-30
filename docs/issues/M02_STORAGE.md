@@ -115,7 +115,7 @@
 
 ## ISSUE-011：reader、严格校验与逻辑道排序
 
-- 状态：Planned
+- 状态：Review（实现+测试完成，等待独立复审；仅人工验收后置 Done，见 [docs/plans/2026-08-30-issue-011-reader.md](../plans/2026-08-30-issue-011-reader.md)）
 - 直接依赖：ISSUE-008～010
 - 映射：FR-010、016
 
