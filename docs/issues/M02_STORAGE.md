@@ -41,7 +41,7 @@
 
 ## ISSUE-009：规范逐道 raw 哈希与黄金向量
 
-- 状态：Review（round 2 最小修复完成，等待独立复审；仅人工验收后置 Done）
+- 状态：Done（2026-08-28 独立复审 PASS WITH CONDITIONS 后经项目负责人授权合并，见 [docs/reports/ISSUE_009_REVIEW_REPORT_R3.md](../reports/ISSUE_009_REVIEW_REPORT_R3.md)）
 - 直接依赖：ISSUE-004～006
 - 映射：FR-008、009、019
 
@@ -78,7 +78,7 @@
 
 ## ISSUE-010：增量 writer、checkpoint 与原子 finalize
 
-- 状态：Review（round 2 最小修复完成，等待独立复审；仅人工验收后置 Done）
+- 状态：Done（2026-08-28 独立复审 PASS WITH CONDITIONS 后经项目负责人授权合并，见 [docs/reports/ISSUE_010_REVIEW_REPORT_R2.md](../reports/ISSUE_010_REVIEW_REPORT_R2.md)）
 - 直接依赖：ISSUE-008、009
 - 映射：FR-007、008、010、ADR-0004
 
