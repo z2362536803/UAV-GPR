@@ -172,6 +172,20 @@ create <file_id>.partial.rcscan
 4. 用户或受控策略确认后，截取到最后完整提交点并输出新的 recovered 文件；
 5. 原 partial 文件继续保留。
 
+### 4.1 非破坏恢复（ISSUE-012 冻结）
+
+非破坏恢复流程的契约（权威实现：`src/uav_gpr/storage/partial_recovery.py`；契约测试：`tests/integration/test_partial_recovery.py`）：
+
+- **恢复对象**：只限崩溃中的 `writing` 生命周期 `*.partial.rcscan`；`finalized`/`recovered`（含 ISSUE-011 `rename_pending=True` 的已完成文件）不进入恢复流程。
+- **只读检查**：`inspect_partial(path)` 返回结构化 `InspectReport`（确定性、可序列化）：schema/mission/checkpoint 事实、全部必需 trace-major 列与 `/frequency/raw` 长度、`physical_record_count`（最短列，同 ISSUE-011 reader 口径）、半写尾部行数（最长列 − checkpoint）、ISSUE-011 校验分类与源文件 SHA256。schema 级问题（未知版本、损坏 checkpoint、列短于 checkpoint、非 HDF5）fail-closed 抛 `DomainError`。
+- **dry-run 计划**：`plan_recovery(path)` 默认 dry-run、绝不写文件；决策新 `file_id`（按 role 用 `AirFileId.new()`/`GroundFileId.new()` 生成，可显式传入）与目标 `<new_file_id>.rcscan`；非 partial 文件名、生命周期非 `writing`、可选 processed 组存在、目标已存在 → `recoverable=False` + `blocked_reasons`；数据级问题（缺道/重复/冲突/缺存储 hash 行）→ `warnings`（恢复原样保留并重新报告，不静默丢弃）。
+- **显式执行**：`execute_recovery(plan)` 的调用即确认，是唯一写路径。执行前重校验源 SHA256（与计划不符拒绝）与目标不存在（已存在拒绝，绝不覆盖）；按物理行字节复制 `[0, committed_record_count)` 的全部必需列与 raw（分块、有界内存），不重新解码、不重新计算 hash。
+- **recovered 文件属性**：新 `file_id`、`lifecycle_state=recovered`、`completion_kind=recovered`、`writer_version`=恢复工具版本（当前 `issue012.1`）、`ended_utc`/checkpoint `updated_utc`=恢复时刻（可注入 clock）、`started_utc`/`created_utc` 与 mission/config/axis/channels/`config_sha256` 从源原样继承；mission attrs 附加恢复 provenance（对 ISSUE-008 probe/ISSUE-011 reader 透明，不改既有冻结属性语义）：`recovery_source_sha256`（源 partial 文件 SHA256）、`recovery_source_file_id`（源 partial 的 file_id）、`recovery_tool_version`（恢复工具组件版本）。
+- **发布前验证**：recovered 文件先以 `*.partial.rcscan` 暂存名写入，经严格 `RcScanReader` 验证（lifecycle/committed 一致）后才原子改名为最终 `.rcscan`。
+- **失败清理**：任一步失败 → 关闭句柄并 best-effort 删除暂存文件，绝不留下看似 finalized 的结果；删除也失败 → 显式错误携带残留路径，且残留文件恒为 partial 命名（永不伪装成最终 `.rcscan`）。恢复中断后重试安全（源未动、暂存已清理）。
+- **源文件保证**：inspect/plan/execute 全程源文件只以 `"r"` 打开，字节不变（测试以 SHA256 对拍钉死）。
+- **排除项**：不原地 truncate/修复/删除源 partial、不自动删除任何文件、不做 GUI；可选 processed 组不在复制范围（存在即拒绝恢复，fail-closed）。
+
 ## 5. 逐道原始哈希
 
 空地一致性必须使用规范化字节流计算 `raw_trace_sha256`。规范至少固定：
