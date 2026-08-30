@@ -152,7 +152,7 @@
 
 ## ISSUE-012：partial 检查与非破坏恢复
 
-- 状态：Review（实现与测试完成，等待独立复审；仅人工验收后置 Done）
+- 状态：Done（2026-08-30 独立复审 PASS WITH CONDITIONS 后经项目负责人授权合并，见 [docs/reports/ISSUE_012_REVIEW_REPORT.md](../reports/ISSUE_012_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-010、011
 - 映射：FR-016、019
 
