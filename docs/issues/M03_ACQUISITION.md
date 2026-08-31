@@ -41,7 +41,7 @@
 
 ## ISSUE-016：单调时钟采集间隔调度器
 
-- 状态：Planned
+- 状态：Done（2026-08-31 独立复审 VERDICT=PASS 后经项目负责人授权合并，见 [docs/reports/ISSUE_016_REVIEW_REPORT.md](../reports/ISSUE_016_REVIEW_REPORT.md)；复审报告 §10 两项可选 P3 硬化已在合并前处理，见计划 E5 执行日志）
 - 直接依赖：ISSUE-006、015
 - 映射：FR-004、005
 
