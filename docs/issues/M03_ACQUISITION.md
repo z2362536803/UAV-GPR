@@ -115,7 +115,7 @@
 
 ## ISSUE-018：`.rcscan` 文件回放后端
 
-- 状态：Planned
+- 状态：Done（2026-08-31 独立复审 PASS WITH CONDITIONS 后经项目负责人授权合并，见 [docs/reports/ISSUE_018_REVIEW_REPORT.md](../reports/ISSUE_018_REVIEW_REPORT.md)；复审 4 项 P3 已在合并前处理，见计划 E 执行日志）
 - 直接依赖：ISSUE-011、015、017
 - 映射：FR-016、018
 
