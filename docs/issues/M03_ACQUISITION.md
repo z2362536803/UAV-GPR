@@ -78,7 +78,7 @@
 
 ## ISSUE-017：采集控制器与暂停/停止状态机
 
-- 状态：Planned
+- 状态：Done（2026-08-31 Round-2 独立复审 VERDICT=PASS 后经项目负责人授权合并，见 [docs/reports/ISSUE_017_REVIEW_REPORT.md](../reports/ISSUE_017_REVIEW_REPORT.md)；Round-1 的 P1-01 与 3 项 P3 已在修复轮关闭）
 - 直接依赖：ISSUE-015、016
 - 映射：FR-002、003、005、018
 
