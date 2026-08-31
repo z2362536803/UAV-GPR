@@ -189,7 +189,7 @@
 
 ## ISSUE-013：`.rcscan` v1 兼容读取与显式迁移
 
-- 状态：Planned
+- 状态：Done（2026-08-31 独立复审 PASS WITH CONDITIONS 后经项目负责人授权合并，见 [docs/reports/ISSUE_013_REVIEW_REPORT.md](../reports/ISSUE_013_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-001、011、012
 - 映射：FR-010、016
 
@@ -226,7 +226,7 @@
 
 ## ISSUE-014：空地 inventory 与逐道一致性服务
 
-- 状态：Planned
+- 状态：Done（2026-08-31 独立复审 PASS WITH CONDITIONS 后经项目负责人授权合并，见 [docs/reports/ISSUE_014_REVIEW_REPORT.md](../reports/ISSUE_014_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-009、011、012
 - 映射：FR-009、019
 

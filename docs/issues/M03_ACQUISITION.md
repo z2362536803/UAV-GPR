@@ -4,7 +4,7 @@
 
 ## ISSUE-015：AcquisitionBackend 契约与确定性模拟器
 
-- 状态：Planned
+- 状态：Done（2026-08-31 独立复审 PASS WITH CONDITIONS 后经项目负责人授权合并，见 [docs/reports/ISSUE_015_REVIEW_REPORT.md](../reports/ISSUE_015_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-004～006
 - 映射：FR-003、018
 
