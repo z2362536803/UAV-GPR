@@ -1,4 +1,4 @@
-"""LibreVNA S11 production acquisition backend (ISSUE-021).
+"""LibreVNA S11/S22 production acquisition backend (ISSUE-021 + ISSUE-022).
 
 The single production path ``LibreVnaUsbBackend`` implements the
 ``AcquisitionBackend`` contract (docs/ACQUISITION.md section 2) by composing
@@ -9,21 +9,33 @@ frame codec, control packets) with the ISSUE-020 stream layer
 ``FrequencySweep`` objects with real UTC+monotonic trace metadata; partial or
 bad sweeps never allocate a formal trace.
 
-Contract highlights (docs/issues/M04_LIBREVNA.md ISSUE-021):
+Contract highlights (docs/issues/M04_LIBREVNA.md ISSUE-021/022):
 
 - lifecycle hooks ``_do_open/_do_configure/_do_acquire/_do_close``; the base
   class owns the state machine, cancellation and ``connection_generation``
   (1 after open, +1 per observed USB disconnect);
 - ``configure`` validates the device capability range, sends ``SET_IDLE``
-  then exactly one ``SWEEP_SETTINGS`` (``stages_bitmap=0x1240``, S11 only;
-  0x1241 dual-reflection belongs to ISSUE-022), and returns
+  then exactly one ``SWEEP_SETTINGS``, and returns
   ``AppliedConfig(config, diff)`` with the int-quantized applied values; the
-  first completed sweep's actual frequency axis is compared against the
-  applied axis (tolerance ``AXIS_TOLERANCE_HZ``) and rejected fail-closed
-  before any trace is emitted (docs/ACQUISITION.md section 4);
+  stages bitmap follows the frozen channel configuration (single channel:
+  ``0x1240`` S11 only; dual ``(hh_s11, vv_s22)``: ``0x1241`` measures both
+  reflections in one sweep); the first completed sweep's actual frequency
+  axis is compared against the applied axis (tolerance ``AXIS_TOLERANCE_HZ``)
+  and rejected fail-closed before any trace is emitted
+  (docs/ACQUISITION.md section 4);
+- ISSUE-022 dual reflection: from the *same* ``VNADatapoint`` set,
+  ``S11 = stage-0 Port1 receiver / Reference`` and
+  ``S22 = stage-1 Port2 receiver / Reference``; the default ``HH:S11`` /
+  ``VV:S22`` binding is configuration (the ordered ``ChannelSpec`` list of
+  the frozen ``MissionConfig``), never a hardcoded array layout; the output
+  is strictly ``channel x frequency`` in config order and the two channels
+  share one ``TraceMetadata``/``trace_uid``/raw hash (a single sweep is a
+  single trace).  A missing/bad/unsupported channel rejects the whole
+  trace; two sequential sweeps are never used to fake a synchronized dual
+  channel;
 - ``acquire`` routes control packets itself (NACK is fail-closed -- ISSUE-020
-  review residual risk 2), feeds datapoints into the strict assembler, and
-  computes ``S11 = Port1 receiver / Reference receiver`` per point;
+  review residual risk 2), feeds datapoints into the strict assembler with
+  the configured receiver plan, and computes the S-parameters per point;
 - errors: lifecycle/state issues use the ``BackendError`` family
   (``BackendConfigRejectedError``/``BackendTimeoutError``/
   ``BackendDisconnectedError``/``BackendCancelledError``/
@@ -60,6 +72,7 @@ from uav_gpr.acquisition.backend import (
 )
 from uav_gpr.acquisition.librevna.stream import (
     DESC_MASK_PORT1,
+    DESC_MASK_PORT2,
     DESC_MASK_REFERENCE,
     DESC_STAGE_SHIFT,
     S11_RECEIVER_PLAN,
@@ -67,6 +80,7 @@ from uav_gpr.acquisition.librevna.stream import (
     LibreVnaDatapointError,
     LibreVnaStreamError,
     LibreVnaSweepTimeoutError,
+    ReceiverSlot,
     StrictSweepAssembler,
     VNADatapoint,
     datapoint_matches_plan,
@@ -123,9 +137,18 @@ _SWEEP_SETTINGS_FORMAT = "<QQHIhBHhH"
 #: (production-verified on LibreVNA firmware 1.6.5 / protocol 14 / hw 1/B).
 S11_STAGES_BITMAP = 0x1240
 
-#: Production-allowed stages bitmaps for this backend (S11 only; the
-#: dual-reflection 0x1241 belongs to ISSUE-022).
-ALLOWED_STAGES_BITMAPS: tuple[int, ...] = (S11_STAGES_BITMAP,)
+#: Dual-reflection (S11/S22) stages bitmap: stage 0 = S11 input set
+#: (Port1/Reference), stage 1 = S22 input set (Port2/Reference), measured in
+#: one sweep (ISSUE-022).
+S11_S22_STAGES_BITMAP = 0x1241
+
+#: Production-allowed stages bitmaps for this backend: 0x1240 is only valid
+#: for a single S11 channel, 0x1241 only for the dual S11/S22 channel set
+#: (the binding is enforced by ``_validate_config``/``_build_sweep_settings``).
+ALLOWED_STAGES_BITMAPS: tuple[int, ...] = (
+    S11_STAGES_BITMAP,
+    S11_S22_STAGES_BITMAP,
+)
 
 #: Bytes requested per USB bulk read (reference read size).
 READ_SIZE = 512
@@ -147,6 +170,33 @@ S11_CHANNEL = ChannelSpec(
     s_parameter=SParameter.S11,
     display_name="HH S11",
 )
+
+#: The S22 channel capability of this backend (ISSUE-022).  The default
+#: ``HH:S11`` / ``VV:S22`` binding is carried by the frozen ``MissionConfig``
+#: channel list (config), never by a hardcoded array layout.
+S22_CHANNEL = ChannelSpec(
+    channel_id="vv_s22",
+    logical_polarization=LogicalPolarization.VV,
+    s_parameter=SParameter.S22,
+    display_name="VV S22",
+)
+
+#: ISSUE-022 dual-reflection receiver plan: stage 0 S11 input set plus
+#: stage 1 S22 input set (frozen shape from the ISSUE-020 plan D5).
+S11S22_RECEIVER_PLAN: tuple[ReceiverSlot, ...] = (
+    *S11_RECEIVER_PLAN,
+    ReceiverSlot(1, DESC_MASK_REFERENCE),
+    ReceiverSlot(1, DESC_MASK_PORT2),
+)
+
+#: S-parameter -> (stage, port receiver mask) binding used to compute each
+#: channel row from a datapoint.  The per-channel semantics come from the
+#: ``ChannelSpec.s_parameter`` field of the frozen config, so the output
+#: layout is config-driven, never a hardcoded array.
+_S_PARAMETER_SLOTS: dict[SParameter, tuple[int, int]] = {
+    SParameter.S11: (0, DESC_MASK_PORT1),
+    SParameter.S22: (1, DESC_MASK_PORT2),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +286,10 @@ def decode_device_info(payload: bytes) -> LibreVnaDeviceInfo:
 def _validate_stages_bitmap(stages_bitmap: int) -> None:
     """Validate ``stages_bitmap``: int, uint16 range, production-verified value.
 
-    Only :data:`S11_STAGES_BITMAP` (0x1240) is allowed in ISSUE-021; the
-    dual-reflection 0x1241 requires ISSUE-022.
+    :data:`S11_STAGES_BITMAP` (0x1240, S11 only) and
+    :data:`S11_S22_STAGES_BITMAP` (0x1241, same-sweep S11/S22 dual, ISSUE-022)
+    are the production-verified values; the channel-set binding is enforced
+    by ``LibreVnaUsbBackend._validate_config``.
     """
     if isinstance(stages_bitmap, bool) or not isinstance(stages_bitmap, int):
         raise TypeError(
@@ -250,7 +302,8 @@ def _validate_stages_bitmap(stages_bitmap: int) -> None:
     if stages_bitmap not in ALLOWED_STAGES_BITMAPS:
         raise ValueError(
             f"stages_bitmap must be one of the production-verified values "
-            f"{ALLOWED_STAGES_BITMAPS} (S11 only in ISSUE-021), got "
+            f"{ALLOWED_STAGES_BITMAPS} "
+            f"(0x1240 = S11 only, 0x1241 = dual S11/S22), got "
             f"{stages_bitmap:#x}"
         )
 
@@ -522,7 +575,7 @@ class LibreVnaUsbBackend(AcquisitionBackend):
         self._sweep_timeout_s = self._settings.sweep_timeout_min_s
         return Capabilities(
             device_id=self._device_id,
-            channels=(S11_CHANNEL,),
+            channels=(S11_CHANNEL, S22_CHANNEL),
             fault_injection=False,
             gnss=False,
         )
@@ -554,9 +607,18 @@ class LibreVnaUsbBackend(AcquisitionBackend):
             self._ignored_packets = 0
             settings = self._build_sweep_settings(config)
             self._sweep_timeout_s = self._compute_sweep_timeout(config)
+            # The receiver plan follows the frozen channel set: S11 only
+            # uses the ISSUE-020 single-stage plan, the dual S11/S22 set uses
+            # the ISSUE-022 stage-0 + stage-1 plan (same sweep, one
+            # datapoint stream).
+            plan = (
+                S11_RECEIVER_PLAN
+                if len(config.channels) == 1
+                else S11S22_RECEIVER_PLAN
+            )
             self._assembler = StrictSweepAssembler(
                 config.frequency_points,
-                receiver_plan=S11_RECEIVER_PLAN,
+                receiver_plan=plan,
                 # check_timeout compares clock units, not SI: our injected
                 # mono clock returns seconds (like time.monotonic), so the
                 # "timeout_ms" argument carries the same seconds value.
@@ -756,7 +818,7 @@ class LibreVnaUsbBackend(AcquisitionBackend):
                 ) from exc
             starts_sweep = (
                 dp.point_number == 0
-                and datapoint_matches_plan(dp, S11_RECEIVER_PLAN)
+                and datapoint_matches_plan(dp, assembler.receiver_plan)
             )
             if starts_sweep:
                 self._sweep_start_utc = self._clock.utc_now()
@@ -799,11 +861,30 @@ class LibreVnaUsbBackend(AcquisitionBackend):
         freqs = np.asarray(
             [dp.frequency_hz for dp in completed.sweep.points], dtype=np.float64
         )
-        s11 = np.asarray(
-            [self._compute_s11(dp) for dp in completed.sweep.points],
-            dtype=np.complex128,
+        # ISSUE-022: one row per frozen channel, in config order.  The row
+        # semantics come from each ChannelSpec.s_parameter (the default
+        # HH:S11 / VV:S22 binding is configuration, not a hardcoded array
+        # layout); a channel without a production-verified S-parameter slot
+        # fails closed before any trace is emitted.
+        rows: list[list[complex]] = []
+        for channel in config.channels:
+            try:
+                stage, port_mask = _S_PARAMETER_SLOTS[channel.s_parameter]
+            except KeyError:
+                raise LibreVnaProtocolError(
+                    "unsupported S-parameter in frozen channel configuration",
+                    channel_id=channel.channel_id,
+                    s_parameter=channel.s_parameter.value,
+                ) from None
+            rows.append(
+                [
+                    self._compute_s_parameter(dp, stage=stage, port_mask=port_mask)
+                    for dp in completed.sweep.points
+                ]
+            )
+        data = np.asarray(rows, dtype=np.complex128).reshape(
+            (len(config.channels), freqs.size)
         )
-        data = s11.reshape((1, s11.size))
         index = self._trace_index
         uid = TraceUid(
             uuid.uuid5(
@@ -869,10 +950,17 @@ class LibreVnaUsbBackend(AcquisitionBackend):
 
     def _validate_config(self, config: MissionConfig, info: LibreVnaDeviceInfo) -> None:
         channels = tuple(config.channels)
-        if channels != (S11_CHANNEL,):
+        supported_sets = (
+            (S11_CHANNEL,),  # ISSUE-021: S11 only, stages bitmap 0x1240
+            (S11_CHANNEL, S22_CHANNEL),  # ISSUE-022: same-sweep S11/S22, 0x1241
+            (S22_CHANNEL, S11_CHANNEL),  # any frozen order: rows follow config
+        )
+        if channels not in supported_sets:
             raise BackendConfigRejectedError(
-                "only the S11 channel (hh_s11) is supported by this backend; "
-                "dual-reflection S11/S22 belongs to ISSUE-022",
+                "unsupported channel configuration: this backend supports "
+                "S11 only ((hh_s11,)) or same-sweep S11/S22 dual reflection "
+                "((hh_s11, vv_s22) in any order); S22-only, S21/S12 and other "
+                "combinations are not production-verified",
                 channels=[str(c.channel_id) for c in channels],
             )
         if (
@@ -976,6 +1064,14 @@ class LibreVnaUsbBackend(AcquisitionBackend):
             )
 
     def _build_sweep_settings(self, config: MissionConfig) -> SweepSettings:
+        # The stages bitmap follows the frozen channel set: a single S11
+        # channel measures stage 0 only (0x1240); the dual S11/S22 set
+        # measures both reflections in one sweep (0x1241, ISSUE-022).  The
+        # binding is enforced here and in ``_validate_config``; the codec
+        # itself accepts both production-verified values.
+        stages_bitmap = (
+            S11_STAGES_BITMAP if len(config.channels) == 1 else S11_S22_STAGES_BITMAP
+        )
         return SweepSettings(
             start_hz=int(config.frequency_start_hz),
             stop_hz=int(config.frequency_stop_hz),
@@ -983,14 +1079,18 @@ class LibreVnaUsbBackend(AcquisitionBackend):
             ifbw_hz=int(config.if_bw_hz),
             power_dbm=round(config.power_dbm * 100.0) / 100.0,
             dwell_us=self._settings.dwell_us,
-            stages_bitmap=S11_STAGES_BITMAP,
+            stages_bitmap=stages_bitmap,
         )
 
     def _compute_sweep_timeout(self, config: MissionConfig) -> float:
         if self._settings.sweep_timeout_s is not None:
             return self._settings.sweep_timeout_s
-        # One stage (S11): per-point measurement time ~ 1/IFBW, 5x safety.
-        expected_s = config.frequency_points * 1.0 / max(float(config.if_bw_hz), 1.0)
+        # Per-point measurement time ~ 1/IFBW per stage; the dual S11/S22
+        # sweep (ISSUE-022) measures two stages, so its budget doubles.
+        stages = 2 if len(config.channels) >= 2 else 1
+        expected_s = (
+            config.frequency_points * stages / max(float(config.if_bw_hz), 1.0)
+        )
         return max(
             self._settings.sweep_timeout_min_s,
             expected_s * self._settings.sweep_timeout_factor,
@@ -1029,27 +1129,33 @@ class LibreVnaUsbBackend(AcquisitionBackend):
             )
 
     @staticmethod
-    def _compute_s11(dp: VNADatapoint) -> complex:
-        """S11 = stage-0 Port1 receiver / stage-0 Reference receiver.
+    def _compute_s_parameter(
+        dp: VNADatapoint, *, stage: int, port_mask: int
+    ) -> complex:
+        """S-parameter = stage-``stage`` Port receiver / stage Reference.
 
+        S11 uses stage 0 / Port1, S22 uses stage 1 / Port2 (ISSUE-022); the
+        caller selects the slot from the frozen ``ChannelSpec.s_parameter``.
         The strict assembler already validated the receiver plan (exactly one
-        reference with non-zero magnitude, exactly one Port1, finite values),
-        so the division is safe; the check is defensive fail-closed.
+        reference with non-zero magnitude, exactly one port slot, finite
+        values), so the division is safe; the check is defensive fail-closed.
         """
         reference: complex | None = None
-        port1: complex | None = None
+        port: complex | None = None
         for desc, value in dp.receivers:
-            if (desc >> DESC_STAGE_SHIFT) != 0:
+            if (desc >> DESC_STAGE_SHIFT) != stage:
                 continue
             if desc & DESC_MASK_REFERENCE:
                 reference = value
-            elif desc & DESC_MASK_PORT1:
-                port1 = value
-        if reference is None or port1 is None or abs(reference) == 0.0:
+            elif desc & port_mask:
+                port = value
+        if reference is None or port is None or abs(reference) == 0.0:
             raise LibreVnaProtocolError(
-                "internal error: plan-valid datapoint lacks S11 slots"
+                "internal error: plan-valid datapoint lacks S-parameter slots",
+                stage=stage,
+                port_mask=port_mask,
             )
-        return port1 / reference
+        return port / reference
 
     # ---- shared helpers ---------------------------------------------------
 

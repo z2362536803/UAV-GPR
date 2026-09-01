@@ -45,6 +45,8 @@ from uav_gpr.acquisition.backend import (
 )
 from uav_gpr.acquisition.librevna.backend import (
     S11_CHANNEL,
+    S11_S22_STAGES_BITMAP,
+    S22_CHANNEL,
     LibreVnaDeviceInfo,
     LibreVnaNackError,
     LibreVnaProtocolError,
@@ -106,6 +108,11 @@ DEVICE_INFO_PAYLOAD_HEX = (
 #: IFBW 100 kHz, -10 dBm, config 0x0C, stages 0x1240 (S11).
 SWEEP_SETTINGS_PAYLOAD_HEX = "00e1f5050000000000ca9a3b000000006500a086010018fc0c401218fc0000"
 
+#: SweepSettings payload golden (31 bytes), stages 0x1241 (dual S11/S22,
+#: ISSUE-022): identical to the S11 golden except the stages field 0x1240 ->
+#: 0x1241 ("4012" -> "4112").
+DUAL_SWEEP_SETTINGS_PAYLOAD_HEX = "00e1f5050000000000ca9a3b000000006500a086010018fc0c411218fc0000"
+
 #: Default test sweep: 100 MHz -> 200 MHz, 101 points (1 MHz step, exact ints).
 SWEEP_START_HZ = 100_000_000
 SWEEP_STOP_HZ = 200_000_000
@@ -148,6 +155,56 @@ def _sweep_bytes(
     freqs = np.linspace(start_hz, stop_hz, points).round().astype(np.int64)
     packets = [
         _point_packet(int(freq) + shift_hz, i, **kwargs) for i, freq in enumerate(freqs)
+    ]
+    return b"".join(packets)
+
+
+def _dual_point_payload(
+    freq_hz: int,
+    point_number: int,
+    *,
+    port1: complex = 0.5 - 0.2j,
+    ref1: complex = 1.0 + 0.0j,
+    port2: complex = 0.3 + 0.1j,
+    ref2: complex = 1.5 + 0.0j,
+    descs: tuple[int, int, int, int] = (0x10, 0x01, 0x30, 0x22),
+) -> bytes:
+    """Dual-reflection datapoint payload (ISSUE-022): both stages per point.
+
+    BLOCKED layout: header + reals(stage0 ref, stage0 port1, stage1 ref,
+    stage1 port2) + imags + descs.  desc bits: stage 0 ref 0x10 / port1 0x01;
+    stage 1 ref 0x30 / port2 0x22 (stage = bits 7-5, reference bit 0x10).
+    """
+    payload = struct.pack("<QhH", int(freq_hz), -1000, int(point_number))
+    payload += struct.pack(
+        "<ffff", ref1.real, port1.real, ref2.real, port2.real
+    )
+    payload += struct.pack(
+        "<ffff", ref1.imag, port1.imag, ref2.imag, port2.imag
+    )
+    payload += bytes(descs)
+    return payload
+
+
+def _dual_point_packet(freq_hz: int, point_number: int, **kwargs: object) -> bytes:
+    return encode_packet(
+        VNA_DATAPOINT, _dual_point_payload(freq_hz, point_number, **kwargs)
+    )
+
+
+def _dual_sweep_bytes(
+    start_hz: int = SWEEP_START_HZ,
+    stop_hz: int = SWEEP_STOP_HZ,
+    points: int = SWEEP_POINTS,
+    *,
+    shift_hz: int = 0,
+    **kwargs: object,
+) -> bytes:
+    """One complete dual-reflection sweep (stage-0 S11 + stage-1 S22)."""
+    freqs = np.linspace(start_hz, stop_hz, points).round().astype(np.int64)
+    packets = [
+        _dual_point_packet(int(freq) + shift_hz, i, **kwargs)
+        for i, freq in enumerate(freqs)
     ]
     return b"".join(packets)
 
@@ -283,6 +340,22 @@ def _config_sweep_settings(config: MissionConfig) -> bytes:
     )
 
 
+def make_dual_config(**overrides: object) -> MissionConfig:
+    """Default ISSUE-022 dual-reflection config (HH:S11 + VV:S22, in order)."""
+    return make_config(channels=[S11_CHANNEL, S22_CHANNEL], **overrides)
+
+
+def _config_dual_sweep_settings(config: MissionConfig) -> bytes:
+    return encode_sweep_settings(
+        int(config.frequency_start_hz),
+        int(config.frequency_stop_hz),
+        config.frequency_points,
+        int(config.if_bw_hz),
+        round(config.power_dbm * 100.0) / 100.0,
+        stages_bitmap=S11_S22_STAGES_BITMAP,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Golden codec vectors
 # ---------------------------------------------------------------------------
@@ -328,8 +401,11 @@ def test_sweep_settings_validation() -> None:
         SweepSettings(100, 200, 1, 100_000, -10.0)  # points < 2
     with pytest.raises(ValueError):
         SweepSettings(100, 200, 101, 0, -10.0)  # ifbw <= 0
+    # 0x1241 (dual reflection, ISSUE-022) is now a production-verified value;
+    # unverified bitmaps stay rejected.
+    SweepSettings(100, 200, 101, 100_000, -10.0, stages_bitmap=0x1241)
     with pytest.raises(ValueError):
-        SweepSettings(100, 200, 101, 100_000, -10.0, stages_bitmap=0x1241)  # S22
+        SweepSettings(100, 200, 101, 100_000, -10.0, stages_bitmap=0x1242)
 
 
 # ---------------------------------------------------------------------------
@@ -344,8 +420,8 @@ def test_open_requests_device_info_and_set_idle() -> None:
     caps = backend.open()
     assert isinstance(caps, Capabilities)
     assert caps.device_id == DEVICE
-    assert caps.channels == (S11_CHANNEL,)
-    assert not caps.supports_dual_channel
+    assert caps.channels == (S11_CHANNEL, S22_CHANNEL)
+    assert caps.supports_dual_channel
     assert not caps.fault_injection
     assert not caps.gnss
     assert backend.state is BackendState.OPEN
@@ -442,14 +518,24 @@ def test_configure_rejects_unsupported_channels() -> None:
     adapter = ScriptedAdapter(open_script())
     backend = make_backend(adapter)
     backend.open()
-    other = ChannelSpec(
-        channel_id="vv_s22",
-        logical_polarization=LogicalPolarization.VV,
-        s_parameter=SParameter.S22,
-        display_name="VV S22",
+    unsupported = ChannelSpec(
+        channel_id="hh_s21",
+        logical_polarization=LogicalPolarization.HH,
+        s_parameter=SParameter.S21,
+        display_name="HH S21",
     )
     with pytest.raises(BackendConfigRejectedError):
-        backend.configure(make_config(channels=[other]))
+        backend.configure(make_config(channels=[unsupported]))
+
+
+def test_configure_rejects_s22_only() -> None:
+    adapter = ScriptedAdapter(open_script())
+    backend = make_backend(adapter)
+    backend.open()
+    # S22-only is not a production-verified stage configuration: the dual
+    # bitmap 0x1241 always measures both reflections in one sweep (ISSUE-022).
+    with pytest.raises(BackendConfigRejectedError):
+        backend.configure(make_config(channels=[S22_CHANNEL]))
 
 
 def test_configure_rejects_out_of_device_range() -> None:
@@ -973,3 +1059,165 @@ def test_lifecycle_illegal_transitions_structured() -> None:
         backend.acquire()  # OPEN, not configured
     backend.close()
     backend.close()  # no-op
+
+
+# ---------------------------------------------------------------------------
+# ISSUE-022: same-sweep S11/S22 dual reflection
+# ---------------------------------------------------------------------------
+
+
+def test_golden_dual_sweep_settings_encode() -> None:
+    payload = encode_sweep_settings(
+        100_000_000, 1_000_000_000, 101, 100_000, -10.0, stages_bitmap=0x1241
+    )
+    assert payload == bytes.fromhex(DUAL_SWEEP_SETTINGS_PAYLOAD_HEX)
+    settings = SweepSettings(
+        start_hz=100_000_000,
+        stop_hz=1_000_000_000,
+        points=101,
+        ifbw_hz=100_000,
+        power_dbm=-10.0,
+        stages_bitmap=S11_S22_STAGES_BITMAP,
+    )
+    assert settings.encode() == bytes.fromhex(DUAL_SWEEP_SETTINGS_PAYLOAD_HEX)
+
+
+def test_dual_configure_sends_dual_stages_bitmap() -> None:
+    adapter = ScriptedAdapter(open_script() + configure_script())
+    backend = make_backend(adapter)
+    backend.open()
+    config = make_dual_config()
+    backend.configure(config)
+    assert backend.state is BackendState.CONFIGURED
+    # writes: REQUEST_DEVICE_INFO, SET_IDLE(open), SET_IDLE(configure),
+    # SWEEP_SETTINGS with the dual stages bitmap 0x1241.
+    assert adapter.writes[3] == encode_packet(
+        SWEEP_SETTINGS, _config_dual_sweep_settings(config)
+    )
+
+
+def test_dual_acquire_values_shape_and_metadata() -> None:
+    adapter = ScriptedAdapter(open_script() + configure_script() + [_dual_sweep_bytes()])
+    clock = ManualClock(UTC0, monotonic_ns=1_000_000_000)
+    backend = make_backend(adapter, clock=clock)
+    backend.open()
+    config = make_dual_config()
+    backend.configure(config)
+    sweep = backend.acquire()
+    assert sweep.channels == (S11_CHANNEL, S22_CHANNEL)
+    assert sweep.frequencies_hz.shape == (SWEEP_POINTS,)
+    assert np.allclose(sweep.frequencies_hz, _expected_axis(config), atol=1.0)
+    assert sweep.data.shape == (2, SWEEP_POINTS)
+    assert np.allclose(sweep.data[0], (0.5 - 0.2j) / (1.0 + 0.0j))  # S11
+    assert np.allclose(sweep.data[1], (0.3 + 0.1j) / (1.5 + 0.0j))  # S22
+    metadata = sweep.metadata
+    assert metadata is not None
+    assert metadata.trace_index == 0
+    assert metadata.connection_generation == 1
+    assert (
+        metadata.sweep_started_utc
+        <= metadata.sweep_midpoint_utc
+        <= metadata.sweep_finished_utc
+    )
+    assert (
+        metadata.sweep_started_monotonic_ns.ns
+        <= metadata.sweep_midpoint_monotonic_ns.ns
+        <= metadata.sweep_finished_monotonic_ns.ns
+    )
+    expected_hash = RawHashSpec(
+        mission_id=MISSION,
+        trace_index=0,
+        trace_uid=metadata.trace_uid,
+        channels=sweep.channels,
+        frequencies_hz=sweep.frequencies_hz,
+        data=sweep.data,
+    ).compute()
+    assert metadata.raw_trace_sha256 == expected_hash
+    assert backend.session_stats["traces"] == 1
+
+
+def test_dual_channel_order_from_config() -> None:
+    adapter = ScriptedAdapter(open_script() + configure_script() + [_dual_sweep_bytes()])
+    backend = make_backend(adapter)
+    backend.open()
+    config = make_config(channels=[S22_CHANNEL, S11_CHANNEL])
+    backend.configure(config)
+    sweep = backend.acquire()
+    assert sweep.channels == (S22_CHANNEL, S11_CHANNEL)
+    assert sweep.data.shape == (2, SWEEP_POINTS)
+    # row semantics come from each ChannelSpec's s_parameter, not the row
+    # index (HH:S11 / VV:S22 default binding is configuration, not a
+    # hardcoded array layout).
+    assert np.allclose(sweep.data[0], (0.3 + 0.1j) / (1.5 + 0.0j))  # S22 row
+    assert np.allclose(sweep.data[1], (0.5 - 0.2j) / (1.0 + 0.0j))  # S11 row
+
+
+def test_dual_partial_channel_failure_no_trace() -> None:
+    # S11-only payloads under a dual config: every datapoint lacks the
+    # stage-1 slots -> plan-invalid -> no sweep is ever assembled -> the
+    # whole trace is rejected (never a partial channel output).
+    adapter = ScriptedAdapter(open_script() + configure_script() + [_sweep_bytes()])
+    backend = make_backend(
+        adapter,
+        mono_clock=TickClock(),
+        settings=LibreVnaUsbSettings(sweep_timeout_s=0.5),
+    )
+    backend.open()
+    backend.configure(make_dual_config())
+    with pytest.raises(BackendTimeoutError):
+        backend.acquire()
+    stats = backend.session_stats
+    assert stats["traces"] == 0
+    assert stats["invalid_points"] == SWEEP_POINTS
+
+
+def test_dual_s22_zero_reference_no_trace() -> None:
+    # stage-1 reference magnitude zero -> every datapoint plan-invalid
+    # (bad denominator) -> whole trace rejected.
+    adapter = ScriptedAdapter(
+        open_script() + configure_script() + [_dual_sweep_bytes(ref2=0.0 + 0.0j)]
+    )
+    backend = make_backend(
+        adapter,
+        mono_clock=TickClock(),
+        settings=LibreVnaUsbSettings(sweep_timeout_s=0.5),
+    )
+    backend.open()
+    backend.configure(make_dual_config())
+    with pytest.raises(BackendTimeoutError):
+        backend.acquire()
+    stats = backend.session_stats
+    assert stats["traces"] == 0
+    assert stats["invalid_points"] == SWEEP_POINTS
+
+
+def test_dual_two_sweeps_in_one_read() -> None:
+    # dual-reflection throughput: two complete dual sweeps in one USB read
+    # -> two traces with per-sweep values and monotonic trace indices.
+    sweep1 = _dual_sweep_bytes(points=11, port1=0.5 + 0.1j, port2=0.2 - 0.3j)
+    sweep2 = _dual_sweep_bytes(points=11, port1=0.9 - 0.1j, port2=-0.4 + 0.2j)
+    adapter = ScriptedAdapter(open_script() + configure_script() + [sweep1 + sweep2])
+    backend = make_backend(adapter)
+    backend.open()
+    backend.configure(make_dual_config(frequency_points=11))
+    first = backend.acquire()
+    second = backend.acquire()
+    assert first.metadata is not None and first.metadata.trace_index == 0
+    assert second.metadata is not None and second.metadata.trace_index == 1
+    assert np.allclose(first.data[0], (0.5 + 0.1j) / 1.0)
+    assert np.allclose(first.data[1], (0.2 - 0.3j) / 1.5)
+    assert np.allclose(second.data[0], (0.9 - 0.1j) / 1.0)
+    assert np.allclose(second.data[1], (-0.4 + 0.2j) / 1.5)
+    assert backend.session_stats["traces"] == 2
+
+
+def test_dual_first_sweep_axis_mismatch_rejected() -> None:
+    adapter = ScriptedAdapter(
+        open_script() + configure_script() + [_dual_sweep_bytes(shift_hz=10_000)]
+    )
+    backend = make_backend(adapter)
+    backend.open()
+    backend.configure(make_dual_config())
+    with pytest.raises(BackendConfigRejectedError):
+        backend.acquire()
+    assert backend.session_stats["traces"] == 0
