@@ -4,7 +4,7 @@
 
 ## ISSUE-019：迁移 LibreVNA USB 传输层
 
-- 状态：Planned
+- 状态：Done（2026-09-02 独立复审 VERDICT=PASS 后经项目负责人自动化授权合并，见 [docs/reports/ISSUE_019_REVIEW_REPORT.md](../reports/ISSUE_019_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-001、015
 - 映射：FR-003、ADR-0005
 
