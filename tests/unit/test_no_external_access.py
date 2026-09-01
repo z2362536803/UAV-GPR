@@ -77,6 +77,10 @@ def test_default_tests_do_not_reference_reference_repositories() -> None:
 def test_hardware_directory_is_the_only_authorized_place() -> None:
     hardware_dir = TESTS_DIR / "hardware"
     assert hardware_dir.is_dir()
+    # ISSUE-023 added the LibreVNA opt-in hardware tests; every hardware test
+    # module must live here (and only here) so the AST guard below can exempt
+    # this directory while scanning every other default test module.
     assert {path.name for path in hardware_dir.glob("*.py")} == {
-        "test_hardware_sentinel.py"
+        "test_hardware_sentinel.py",
+        "test_librevna_hardware.py",
     }

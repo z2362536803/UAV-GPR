@@ -40,8 +40,14 @@ from uav_gpr.acquisition.backend import (
     BackendDisconnectedError,
     BackendError,
     BackendState,
+    BackendStateError,
     BackendTimeoutError,
     Capabilities,
+)
+from uav_gpr.acquisition.controller import (
+    AcquisitionController,
+    ControllerState,
+    StopReason,
 )
 from uav_gpr.acquisition.librevna.backend import (
     S11_CHANNEL,
@@ -55,6 +61,11 @@ from uav_gpr.acquisition.librevna.backend import (
     SweepSettings,
     decode_device_info,
     encode_sweep_settings,
+)
+from uav_gpr.acquisition.librevna.reconnect import (
+    LibreVnaReconnectError,
+    LibreVnaReconnector,
+    LibreVnaReconnectPolicy,
 )
 from uav_gpr.acquisition.librevna.stream import (
     S11_RECEIVER_PLAN,
@@ -1221,3 +1232,438 @@ def test_dual_first_sweep_axis_mismatch_rejected() -> None:
     with pytest.raises(BackendConfigRejectedError):
         backend.acquire()
     assert backend.session_stats["traces"] == 0
+
+
+# ---------------------------------------------------------------------------
+# ISSUE-023: disconnect/reconnect, backoff, controller in-flight cooperation
+# ---------------------------------------------------------------------------
+
+INTERVAL_NS = 500_000_000  # matches make_config().target_interval_s (0.5 s)
+
+
+def reconnect_script() -> list[object]:
+    """Reads consumed by a successful ``reconnect_session``: DEVICE_INFO +
+    ACK (SET_IDLE) + ACK (SET_IDLE) + ACK (SWEEP_SETTINGS)."""
+    return [
+        encode_packet(DEVICE_INFO, _device_info_payload()),
+        encode_packet(ACK),
+        encode_packet(ACK),
+        encode_packet(ACK),
+    ]
+
+
+class ManualWaiter:
+    """Event-based interruptible waiter (ISSUE-017 controller test pattern)."""
+
+    def __init__(self) -> None:
+        self._event = threading.Event()
+        self.waiting_event = threading.Event()
+        self.wait_calls = 0
+
+    def wait(self, timeout_ns: int) -> bool:
+        self.wait_calls += 1
+        self.waiting_event.set()
+        woke = self._event.wait(timeout_ns / 1_000_000_000.0)
+        self._event.clear()
+        return woke
+
+    def wake(self) -> None:
+        self._event.set()
+
+
+def advance_and_wake(clock: ManualClock, waiter: ManualWaiter) -> None:
+    """Sync on the scheduler wait, advance one virtual interval, wake."""
+    assert waiter.waiting_event.wait(10.0)
+    clock.advance_monotonic(INTERVAL_NS)
+    waiter.wake()
+
+
+def test_reconnect_session_preserves_trace_and_bumps_generation() -> None:
+    adapter = ScriptedAdapter(
+        open_script()
+        + configure_script()
+        + [
+            _sweep_bytes(),
+            LibreVnaDisconnectedError("usb unplugged"),
+            *reconnect_script(),
+            _sweep_bytes(),
+        ]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    backend.open()
+    backend.configure(config)
+    first = backend.acquire()
+    assert first.metadata.trace_index == 0
+    assert first.metadata.connection_generation == 1
+    with pytest.raises(BackendDisconnectedError):
+        backend.acquire()
+    assert backend.connection_generation == 2
+    applied = backend.reconnect_session(config)
+    assert backend.connection_generation == 3
+    assert backend.state is BackendState.CONFIGURED
+    assert applied.config.frequency_points == SWEEP_POINTS
+    second = backend.acquire()
+    assert second.metadata.trace_index == 1  # no duplicate index after reconnect
+    assert second.metadata.connection_generation == 3
+    assert second.metadata.trace_uid != first.metadata.trace_uid
+    assert backend.session_stats["traces"] == 2
+
+
+def test_reconnect_session_reapplies_axis_gate_on_first_sweep() -> None:
+    adapter = ScriptedAdapter(
+        open_script()
+        + configure_script()
+        + [
+            _sweep_bytes(),
+            LibreVnaDisconnectedError("usb unplugged"),
+            *reconnect_script(),
+            _sweep_bytes(shift_hz=500),
+        ]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    backend.open()
+    backend.configure(config)
+    assert backend.acquire().metadata.trace_index == 0
+    with pytest.raises(BackendDisconnectedError):
+        backend.acquire()
+    backend.reconnect_session(config)
+    with pytest.raises(BackendConfigRejectedError):
+        backend.acquire()  # first post-reconnect sweep must pass the axis gate
+    assert backend.session_stats["traces"] == 1  # no trace allocated
+
+
+def test_reconnect_session_failure_fails_closed_without_resetting_trace() -> None:
+    adapter = ScriptedAdapter(
+        open_script()
+        + configure_script()
+        + [
+            _sweep_bytes(),
+            LibreVnaDisconnectedError("usb unplugged"),
+            # no reconnect reads: the device-info phase times out
+        ]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    backend.open()
+    backend.configure(config)
+    assert backend.acquire().metadata.trace_index == 0
+    with pytest.raises(BackendDisconnectedError):
+        backend.acquire()
+    with pytest.raises(BackendTimeoutError):
+        backend.reconnect_session(config)
+    assert backend.connection_generation == 2  # no bump on failure
+    assert adapter.closed  # transport released on failure
+    with pytest.raises(BackendStateError):
+        backend.acquire()  # fail-closed: unconfigured session
+    assert backend.session_stats["traces"] == 1  # trace counter preserved
+
+
+def test_reconnect_policy_delays_are_exponential_and_capped() -> None:
+    policy = LibreVnaReconnectPolicy(
+        max_attempts=5, initial_delay_s=0.5, backoff_factor=2.0, max_delay_s=4.0
+    )
+    assert policy.delay_after_failed_attempt(1) == 0.5
+    assert policy.delay_after_failed_attempt(2) == 1.0
+    assert policy.delay_after_failed_attempt(3) == 2.0
+    assert policy.delay_after_failed_attempt(4) == 4.0  # capped at max_delay_s
+    assert policy.delay_after_failed_attempt(9) == 4.0
+    with pytest.raises(ValueError):
+        LibreVnaReconnectPolicy(max_attempts=0)
+    with pytest.raises(ValueError):
+        LibreVnaReconnectPolicy(initial_delay_s=-1.0)
+    with pytest.raises(ValueError):
+        LibreVnaReconnectPolicy(backoff_factor=0.5)
+    with pytest.raises(ValueError):
+        LibreVnaReconnectPolicy(max_delay_s=0.1, initial_delay_s=1.0)
+
+
+def test_reconnector_retries_with_backoff_then_succeeds() -> None:
+    adapter = ScriptedAdapter(
+        open_script()
+        + configure_script()
+        + [_sweep_bytes(), LibreVnaDisconnectedError("usb unplugged")]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    backend.open()
+    backend.configure(config)
+    assert backend.acquire().metadata.trace_index == 0
+    with pytest.raises(BackendDisconnectedError):
+        backend.acquire()
+    # the device is gone: every reconnect open fails until it reappears
+    adapter.open_error = LibreVnaDeviceNotFoundError("device not present yet")
+    waits: list[float] = []
+
+    def wait(delay: float) -> None:
+        waits.append(delay)
+        if len(waits) == 2:  # device reappears before attempt 3
+            adapter.open_error = None
+            adapter.extend([*reconnect_script(), _sweep_bytes()])
+
+    reconnector = LibreVnaReconnector(
+        backend,
+        config,
+        policy=LibreVnaReconnectPolicy(
+            max_attempts=3, initial_delay_s=0.1, backoff_factor=2.0, max_delay_s=1.0
+        ),
+        wait=wait,
+    )
+    applied = reconnector()
+    assert applied.config.frequency_points == SWEEP_POINTS
+    assert waits == [0.1, 0.2]
+    assert backend.connection_generation == 3
+    sweep = backend.acquire()
+    assert sweep.metadata.trace_index == 1
+    assert sweep.metadata.connection_generation == 3
+
+
+def test_reconnector_exhaustion_raises_structured_error() -> None:
+    adapter = ScriptedAdapter(
+        open_script()
+        + configure_script()
+        + [_sweep_bytes(), LibreVnaDisconnectedError("usb unplugged")]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    backend.open()
+    backend.configure(config)
+    assert backend.acquire().metadata.trace_index == 0
+    with pytest.raises(BackendDisconnectedError):
+        backend.acquire()
+    adapter.open_error = LibreVnaDeviceNotFoundError("never present")
+    waits: list[float] = []
+    reconnector = LibreVnaReconnector(
+        backend,
+        config,
+        policy=LibreVnaReconnectPolicy(
+            max_attempts=3, initial_delay_s=0.1, backoff_factor=2.0, max_delay_s=1.0
+        ),
+        wait=lambda delay: waits.append(delay),
+    )
+    with pytest.raises(LibreVnaReconnectError) as excinfo:
+        reconnector()
+    assert excinfo.value.reason == "reconnect_failed"
+    assert excinfo.value.context["attempts"] == 3
+    assert waits == [0.1, 0.2]
+    assert backend.connection_generation == 2
+
+
+def test_reconnector_propagates_cancellation() -> None:
+    adapter = ScriptedAdapter(open_script() + configure_script())
+    backend = make_backend(adapter)
+    backend.open()
+    backend.configure(make_config())
+    backend.cancel()
+    reconnector = LibreVnaReconnector(backend, make_config())
+    with pytest.raises(BackendCancelledError):
+        reconnector()
+
+
+def test_controller_reconnect_hook_librevna_continues_without_duplicate_trace() -> None:
+    adapter = ScriptedAdapter(
+        open_script()
+        + configure_script()
+        + [
+            _sweep_bytes(),
+            LibreVnaDisconnectedError("usb unplugged"),
+            *reconnect_script(),
+            _sweep_bytes(),
+            _sweep_bytes(),
+        ]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    clock = ManualClock(UTC0, 0)
+    waiter = ManualWaiter()
+    controller = AcquisitionController(
+        backend,
+        clock=clock,
+        waiter=waiter,
+        reconnect_hook=LibreVnaReconnector(
+            backend,
+            config,
+            policy=LibreVnaReconnectPolicy(
+                max_attempts=1, initial_delay_s=0.01, backoff_factor=2.0, max_delay_s=0.01
+            ),
+        ),
+    )
+    controller.configure(config)
+    controller.start()
+    first = controller.sweeps.get(2.0)
+    assert first is not None
+    assert first.metadata.trace_index == 0
+    assert first.metadata.connection_generation == 1
+    advance_and_wake(clock, waiter)  # next tick pops the disconnect; hook reconnects
+    second = controller.sweeps.get(2.0)
+    assert second is not None
+    assert second.metadata.trace_index == 1
+    assert second.metadata.connection_generation == 3
+    assert controller.connection_generation == 3
+    assert controller.state is ControllerState.RUNNING
+    controller.stop()
+    assert controller.wait_finished(2.0)
+    assert controller.state is ControllerState.STOPPED
+    controller.close()
+    assert adapter.closed
+
+
+def test_controller_pause_resume_stop_librevna_backend_no_leak() -> None:
+    adapter = ScriptedAdapter(
+        open_script() + configure_script() + [_sweep_bytes() for _ in range(6)]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    clock = ManualClock(UTC0, 0)
+    waiter = ManualWaiter()
+    controller = AcquisitionController(backend, clock=clock, waiter=waiter)
+    controller.configure(config)
+    controller.start()
+    first = controller.sweeps.get(2.0)
+    assert first is not None
+    controller.pause()
+    assert controller.state is ControllerState.PAUSED
+    # paused: clock advances + wakes produce no new sweep
+    clock.advance_monotonic(INTERVAL_NS)
+    waiter.wake()
+    assert controller.sweeps.get(0.2) is None
+    controller.resume()
+    assert controller.state is ControllerState.RUNNING
+    advance_and_wake(clock, waiter)
+    second = controller.sweeps.get(2.0)
+    assert second is not None
+    controller.stop()
+    assert controller.wait_finished(2.0)
+    assert controller.state is ControllerState.STOPPED
+    assert controller.join(2.0)
+    controller.close()
+    assert adapter.closed
+    indices = [first.metadata.trace_index, second.metadata.trace_index]
+    assert indices == sorted(indices)
+    assert len(set(indices)) == len(indices)
+    assert first.metadata.connection_generation == 1
+    assert second.metadata.connection_generation == 1
+
+
+def test_controller_emergency_stop_interrupts_in_flight_librevna() -> None:
+    adapter = ScriptedAdapter(open_script() + configure_script())  # silent device
+    backend = make_backend(
+        adapter,
+        mono_clock=time.monotonic,
+        settings=LibreVnaUsbSettings(sweep_timeout_s=60.0),
+    )
+    config = make_config()
+    clock = ManualClock(UTC0, 0)
+    waiter = ManualWaiter()
+    controller = AcquisitionController(backend, clock=clock, waiter=waiter)
+    controller.configure(config)
+    controller.start()
+    # the first sweep is due immediately after start(): the worker blocks in
+    # acquire on the silent device until interrupted
+    assert backend.acquire_started.wait(5.0)
+    controller.emergency_stop()
+    assert controller.wait_finished(5.0)
+    assert controller.state is ControllerState.STOPPED
+    assert controller.stop_reason is StopReason.EMERGENCY
+    assert controller.sweeps.size == 0  # interrupted sweep is never published
+    controller.close()
+    assert adapter.closed
+
+
+# ---------------------------------------------------------------------------
+# ISSUE-023 repair round 2 (t10): emergency_stop x reconnect race (P2-1),
+# reconnect identity re-verification, cancellable backoff wait
+# ---------------------------------------------------------------------------
+
+#: Same golden DEVICE_INFO layout but firmware 2.2.3 (was 1.2.3): a different
+#: physical unit must be rejected fail-closed on reconnect.
+OTHER_DEVICE_INFO_PAYLOAD_HEX = (
+    "0e00020203054100e1f5050000000000bca065010000000100000040420f00112748f4e803"
+    "0100000040420f00c8007841cb0200000002ffff"
+)
+
+
+def test_controller_emergency_stop_races_reconnect_ends_stopped() -> None:
+    """Probe A (P2-1): emergency_stop during the reconnect backoff must end
+    STOPPED/EMERGENCY, never FAILED (the hook abort is a stop race, not a
+    fault -- same pattern as the cancelled/closed acquire paths)."""
+    adapter = ScriptedAdapter(
+        open_script()
+        + configure_script()
+        + [_sweep_bytes(), LibreVnaDisconnectedError("usb unplugged")]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    clock = ManualClock(UTC0, 0)
+    waiter = ManualWaiter()
+    entered = threading.Event()
+
+    def hook() -> None:
+        entered.set()
+        # every reconnect attempt fails (no reads left); the default backoff
+        # wait is cancellable so emergency_stop aborts it promptly
+        LibreVnaReconnector(
+            backend,
+            config,
+            policy=LibreVnaReconnectPolicy(
+                max_attempts=5, initial_delay_s=1.0, backoff_factor=2.0, max_delay_s=8.0
+            ),
+        )()
+
+    controller = AcquisitionController(
+        backend, clock=clock, waiter=waiter, reconnect_hook=hook
+    )
+    controller.configure(config)
+    controller.start()
+    first = controller.sweeps.get(2.0)
+    assert first is not None
+    advance_and_wake(clock, waiter)  # next tick pops the disconnect: hook starts
+    assert entered.wait(5.0)
+    controller.emergency_stop()
+    assert controller.wait_finished(5.0)
+    assert controller.state is ControllerState.STOPPED
+    assert controller.stop_reason is StopReason.EMERGENCY
+    assert controller.error is None  # never overwritten with a hook-failure
+    controller.close()
+    assert adapter.closed
+
+
+def test_reconnect_session_rejects_identity_change() -> None:
+    """A reconnected device with a different firmware identity is rejected
+    fail-closed: no generation bump, no trace counter reset (P2-1 identity)."""
+    adapter = ScriptedAdapter(
+        open_script()
+        + configure_script()
+        + [
+            _sweep_bytes(),
+            LibreVnaDisconnectedError("usb unplugged"),
+            encode_packet(DEVICE_INFO, bytes.fromhex(OTHER_DEVICE_INFO_PAYLOAD_HEX)),
+            encode_packet(ACK),
+            encode_packet(ACK),
+            encode_packet(ACK),
+        ]
+    )
+    backend = make_backend(adapter)
+    config = make_config()
+    backend.open()
+    backend.configure(config)
+    assert backend.acquire().metadata.trace_index == 0
+    with pytest.raises(BackendDisconnectedError):
+        backend.acquire()
+    with pytest.raises(LibreVnaProtocolError):
+        backend.reconnect_session(config)
+    assert backend.connection_generation == 2  # no bump on rejected identity
+    assert adapter.closed  # released fail-closed
+    assert backend.session_stats["traces"] == 1  # trace counter preserved
+
+
+def test_backend_wait_cancellable_returns_without_cancel_and_validates() -> None:
+    backend = make_backend(ScriptedAdapter(open_script() + configure_script()))
+    backend.open()
+    backend.configure(make_config())
+    backend.wait_cancellable(0.001)  # no cancellation: returns normally
+    with pytest.raises(ValueError):
+        backend.wait_cancellable(0.0)
+    with pytest.raises(ValueError):
+        backend.wait_cancellable(-1.0)
