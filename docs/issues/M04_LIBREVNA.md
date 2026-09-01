@@ -78,7 +78,7 @@
 
 ## ISSUE-021：S11 生产采集后端
 
-- 状态：Planned
+- 状态：Done（2026-09-02 独立复审 VERDICT=PASS 后经项目负责人自动化授权合并，见 [docs/reports/ISSUE_021_REVIEW_REPORT.md](../reports/ISSUE_021_REVIEW_REPORT.md)；6 项 P3 观察不阻止合并，P3-2 延后记录）
 - 直接依赖：ISSUE-017、020
 - 映射：FR-003、004
 
