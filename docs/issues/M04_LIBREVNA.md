@@ -41,7 +41,7 @@
 
 ## ISSUE-020：LibreVNA 包流与严格 sweep 组装器
 
-- 状态：Planned
+- 状态：Done（2026-09-02 独立复审 VERDICT=PASS 后经项目负责人自动化授权合并，见 [docs/reports/ISSUE_020_REVIEW_REPORT.md](../reports/ISSUE_020_REVIEW_REPORT.md)；5 项 P3 建议随 ISSUE-021 顺带关闭）
 - 直接依赖：ISSUE-019
 - 映射：FR-003、`ACQUISITION.md` 第 5 节
 
