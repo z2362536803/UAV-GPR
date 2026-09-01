@@ -827,6 +827,17 @@ class AcquisitionController:
         try:
             hook()
         except Exception as hook_exc:
+            with self._lock:
+                closing = self._closing
+                state = self._state
+            if closing or state is ControllerState.STOPPING:
+                # close()/stop()/emergency_stop() raced the reconnect: the
+                # hook abort is a stop race, not a fault -- the loop top
+                # decides (CLOSED, or STOPPED with the stop reason
+                # preserved).  Never overwrite the terminal state with
+                # FAILED (same pattern as the cancelled/closed acquire
+                # paths above).
+                return
             self._fail(
                 ControllerFailure(
                     "reconnect hook failed",
@@ -835,13 +846,14 @@ class AcquisitionController:
                 )
             )
             return
-        # NOTE (P3-03, ISSUE-019/023): ``connection_generation`` is a
-        # *per-open-session* counter (backend.py: open() resets it to 1,
-        # every simulated disconnect increments it), so a reconnect that
-        # closes+reopens the backend legitimately observes a *changed* value
-        # rather than an ever-increasing one.  The definitive generation
-        # semantics for real USB reconnect must be recorded in docs/ADR when
-        # ISSUE-019/023 implement the physical reconnect path.
+        # NOTE (P3-03, ISSUE-019/023, resolved in ISSUE-023): for simulated
+        # backends ``connection_generation`` is a per-open-session counter
+        # (open() resets it to 1, every simulated disconnect increments it).
+        # The physical LibreVNA reconnect path (LibreVnaUsbBackend.
+        # reconnect_session / reconnect.py) keeps the base lifecycle state
+        # CONFIGURED and increments once per disconnect and once per
+        # successful reconnect -- strictly increasing; recorded in
+        # docs/plans/2026-09-02-issue-023-librevna-reconnect.md decision D1.
         if (
             self._backend.state is not BackendState.CONFIGURED
             or self._backend.connection_generation == generation
