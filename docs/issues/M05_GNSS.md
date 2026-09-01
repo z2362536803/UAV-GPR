@@ -4,7 +4,7 @@
 
 ## ISSUE-024：GGA/RMC NMEA 解析器
 
-- 状态：Planned
+- 状态：Done（2026-09-02 独立复审 VERDICT=PASS 后经项目负责人自动化授权合并，见 [docs/reports/ISSUE_024_REVIEW_REPORT.md](../reports/ISSUE_024_REVIEW_REPORT.md)；1 项 P3 非阻塞，可随 ISSUE-025 顺手关闭）
 - 直接依赖：ISSUE-001、005
 - 映射：FR-006、ADR-0005
 
