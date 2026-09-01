@@ -152,7 +152,7 @@
 
 ## ISSUE-023：LibreVNA 重连、暂停恢复与硬件基准
 
-- 状态：Planned
+- 状态：Blocked（等待真机，2026-09-02 round-2 独立复审 VERDICT=PASS 后模拟部分已自动合并，见 [docs/reports/ISSUE_023_REVIEW_REPORT.md](../reports/ISSUE_023_REVIEW_REPORT.md)；⚠️ 本环境无指定真机——真机矩阵 p50/p95/p99 与硬件/固件/commit 报告待真机后补跑，不伪造完成；具备指定真机并完成硬件基准后置 Done）
 - 直接依赖：ISSUE-017、021、022
 - 映射：FR-003～005、性能门禁
 
