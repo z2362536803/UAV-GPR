@@ -115,7 +115,7 @@
 
 ## ISSUE-022：同 sweep S11/S22 双反射采集
 
-- 状态：Planned
+- 状态：Done（2026-09-02 独立复审 VERDICT=PASS 后经项目负责人自动化授权合并，见 [docs/reports/ISSUE_022_REVIEW_REPORT.md](../reports/ISSUE_022_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-021
 - 映射：FR-003、013
 
