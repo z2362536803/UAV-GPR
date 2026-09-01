@@ -36,6 +36,14 @@ Contract highlights (docs/issues/M04_LIBREVNA.md ISSUE-021/022):
 - ``acquire`` routes control packets itself (NACK is fail-closed -- ISSUE-020
   review residual risk 2), feeds datapoints into the strict assembler with
   the configured receiver plan, and computes the S-parameters per point;
+- ISSUE-023: ``reconnect_session`` re-establishes the USB session in place
+  after a disconnect (backoff/retry policy lives in ``reconnect.py``): the
+  frozen config is re-validated and re-applied against a freshly read
+  ``DEVICE_INFO``, ``connection_generation`` increments per successful
+  reconnect (strictly increasing; the base lifecycle state stays
+  ``CONFIGURED`` so the controller's reconnect hook contract holds), trace
+  counters are preserved (no duplicate trace index/UID) and the first sweep
+  after the reconnect must pass the requested/applied axis gate again;
 - errors: lifecycle/state issues use the ``BackendError`` family
   (``BackendConfigRejectedError``/``BackendTimeoutError``/
   ``BackendDisconnectedError``/``BackendCancelledError``/
@@ -66,6 +74,7 @@ from uav_gpr.acquisition.backend import (
     AppliedConfig,
     BackendConfigRejectedError,
     BackendDisconnectedError,
+    BackendState,
     BackendStateError,
     BackendTimeoutError,
     Capabilities,
@@ -505,6 +514,10 @@ class LibreVnaUsbBackend(AcquisitionBackend):
         self._unexpected_acks = 0
         self._ignored_packets = 0
         self._sweep_timeout_s = self._settings.sweep_timeout_min_s
+        # ISSUE-023: set by ``reconnect_session`` so the first sweep after a
+        # physical reconnect must pass the requested/applied axis gate again
+        # (trace_index alone is no longer a fresh-session marker).
+        self._require_axis_verify = False
 
     # ---- observable state -------------------------------------------------
 
@@ -538,6 +551,35 @@ class LibreVnaUsbBackend(AcquisitionBackend):
             "unexpected_acks": self._unexpected_acks,
             "ignored_packets": self._ignored_packets,
         }
+
+    @property
+    def cancel_requested(self) -> bool:
+        """Whether the controller requested cancellation (close/emergency).
+
+        ISSUE-023: the reconnect loop checks this between attempts so a
+        ``close()``/``emergency_stop()`` during reconnection aborts promptly
+        instead of sleeping through the remaining backoff schedule.
+        """
+        return self._cancel_event.is_set()
+
+    def wait_cancellable(self, seconds: float) -> None:
+        """Block up to ``seconds``; abort early when cancellation is requested.
+
+        ISSUE-023 repair round 2 (P2-1): the reconnect backoff wait uses
+        this so a ``close()``/``emergency_stop()`` during a retry pause is
+        honoured on the cancel-event wake-up instead of sleeping through the
+        whole delay.  Raises ``BackendCancelledError``/``BackendClosedError``
+        through the base interruption path when the cancel event is set.
+        """
+        if (
+            isinstance(seconds, bool)
+            or not isinstance(seconds, (int, float))
+            or not math.isfinite(float(seconds))
+            or seconds <= 0.0
+        ):
+            raise ValueError("seconds must be a finite positive number")
+        if self._cancel_event.wait(seconds):
+            self._raise_interrupted(self._attempt)
 
     def _stats_dict(self) -> dict[str, JsonValue]:
         """Session statistics as JSON-safe error context."""
@@ -573,6 +615,7 @@ class LibreVnaUsbBackend(AcquisitionBackend):
         self._unexpected_acks = 0
         self._ignored_packets = 0
         self._sweep_timeout_s = self._settings.sweep_timeout_min_s
+        self._require_axis_verify = False
         return Capabilities(
             device_id=self._device_id,
             channels=(S11_CHANNEL, S22_CHANNEL),
@@ -605,6 +648,7 @@ class LibreVnaUsbBackend(AcquisitionBackend):
             self._prev_start_mono = None
             self._unexpected_acks = 0
             self._ignored_packets = 0
+            self._require_axis_verify = False
             settings = self._build_sweep_settings(config)
             self._sweep_timeout_s = self._compute_sweep_timeout(config)
             # The receiver plan follows the frozen channel set: S11 only
@@ -726,6 +770,121 @@ class LibreVnaUsbBackend(AcquisitionBackend):
         self._device_info = None
         self._applied = None
         self._assembler = None
+        self._require_axis_verify = False
+
+    def reconnect_session(self, config: MissionConfig) -> AppliedConfig:
+        """Re-establish the USB session in place after a disconnect (ISSUE-023).
+
+        Contract (controller ``_handle_disconnect``, plan D1): the base
+        lifecycle state stays ``CONFIGURED``, ``connection_generation``
+        increments once per successful reconnect, and the trace counters are
+        preserved -- no trace index/UID is ever repeated.  The frozen config
+        is re-validated against a freshly read ``DEVICE_INFO`` and re-applied
+        (requested/applied re-verified; unconfirmed config is never reused,
+        docs/ACQUISITION.md section 4), and the first sweep after the
+        reconnect must pass the requested/applied axis gate again
+        (``_require_axis_verify``, plan D2).
+
+        On failure the transport is released and local acquisition state is
+        cleared fail-closed while the trace counters stay untouched (plan
+        D5); the caller (``LibreVnaReconnector``) retries with backoff.
+        """
+        if not isinstance(config, MissionConfig):
+            raise TypeError(
+                f"config must be a MissionConfig, got {type(config).__name__}"
+            )
+        with self._lock:
+            if self._state is not BackendState.CONFIGURED:
+                raise BackendStateError(
+                    "reconnect requires a configured backend",
+                    operation="reconnect",
+                    state=self._state.value,
+                    allowed_states=[BackendState.CONFIGURED.value],
+                )
+        self._require_axis_verify = False
+        try:
+            # Fresh USB session: release the old (possibly broken) handle,
+            # then reopen and re-read the device identity.
+            try:
+                self._transport.close()
+            except Exception:  # best-effort: the session may already be gone
+                pass
+            self._transport.open()
+            info = self._wait_for_device_info(self._settings.device_info_timeout_s)
+            previous = self._device_info
+            if previous is not None:
+                # A reconnect must re-confirm the device identity, never
+                # silently continue with a different unit (plan D10).
+                self._verify_device_identity(previous, info)
+            self._device_info = info
+            self._send_command(SET_IDLE, timeout_s=self._settings.command_timeout_s)
+            # Re-apply the frozen config against the fresh device info:
+            # validate, quantize, verify requested/applied tolerance, rebuild
+            # the strict assembler and re-send SWEEP_SETTINGS.  The device
+            # state after a reconnect is unverifiable until the config is
+            # confirmed again, so nothing is reused from before.
+            self._validate_config(config, info)
+            applied_config = self._quantize_config(config)
+            self._verify_contract_tolerance(config, applied_config)
+            diff = ConfigDiff.compute(config, applied_config)
+            self._frame_stream.reset()
+            self._assembler = None
+            self._pending_sweeps = []
+            self._sweep_deadline = None
+            self._sweep_start_utc = None
+            self._sweep_start_mono = None
+            self._attempt = 0
+            self._unexpected_acks = 0
+            self._ignored_packets = 0
+            settings = self._build_sweep_settings(config)
+            self._sweep_timeout_s = self._compute_sweep_timeout(config)
+            # The receiver plan follows the frozen channel set (same rule as
+            # ``_do_configure``): S11 only vs same-sweep S11/S22 dual.
+            plan = (
+                S11_RECEIVER_PLAN
+                if len(config.channels) == 1
+                else S11S22_RECEIVER_PLAN
+            )
+            self._assembler = StrictSweepAssembler(
+                config.frequency_points,
+                receiver_plan=plan,
+                # check_timeout compares clock units, not SI (see _do_configure).
+                timeout_ms=self._sweep_timeout_s,
+                clock=self._mono_clock,
+            )
+            self._send_command(
+                SWEEP_SETTINGS,
+                payload=settings.encode(),
+                timeout_s=self._settings.command_timeout_s,
+            )
+            applied = AppliedConfig(config=applied_config, diff=diff)
+            self._applied = applied
+            # A successful reconnect is a new connection epoch: generation
+            # strictly increments (P3-03 semantics, plan D1).  Trace counters
+            # (_trace_index/_prev_start_mono) are intentionally preserved so
+            # the next trace continues without duplication.
+            self._bump_generation()
+            self._require_axis_verify = True
+            return applied
+        except Exception:
+            # Fail-closed: clear local acquisition state and release the
+            # transport; trace counters stay untouched so a later retry can
+            # succeed without repeating trace indices (plan D5).
+            self._applied = None
+            self._assembler = None
+            self._frame_stream.reset()
+            self._pending_sweeps = []
+            self._sweep_deadline = None
+            self._sweep_start_utc = None
+            self._sweep_start_mono = None
+            self._attempt = 0
+            self._unexpected_acks = 0
+            self._ignored_packets = 0
+            try:
+                self._transport.close()
+            except Exception:  # best-effort release on reconnect failure
+                pass
+            raise
 
     # ---- command/response phase ------------------------------------------
 
@@ -856,8 +1015,14 @@ class LibreVnaUsbBackend(AcquisitionBackend):
                 "internal error: finalize without applied config"
             )
         config = applied.config
-        if self._trace_index == 0:
+        if self._trace_index == 0 or self._require_axis_verify:
+            # ISSUE-023: the axis gate runs on the first sweep of a session
+            # AND on the first sweep after a physical reconnect (the device
+            # may have changed while unplugged; unconfirmed config is never
+            # trusted).  A rejection keeps the flag set so the next sweep
+            # re-checks and no trace is emitted until the axis is confirmed.
             self._verify_first_axis(completed.sweep)
+            self._require_axis_verify = False
         freqs = np.asarray(
             [dp.frequency_hz for dp in completed.sweep.points], dtype=np.float64
         )
@@ -1129,6 +1294,32 @@ class LibreVnaUsbBackend(AcquisitionBackend):
             )
 
     @staticmethod
+    def _verify_device_identity(
+        previous: LibreVnaDeviceInfo, fresh: LibreVnaDeviceInfo
+    ) -> None:
+        """Fail-closed when the reconnected device identity changed.
+
+        ISSUE-023 repair round 2 (P2-1): a reconnect must re-confirm the
+        device, never silently continue with a different unit.  Protocol v14
+        ``DEVICE_INFO`` carries no USB serial number, so the in-band identity
+        fields (protocol, firmware, hardware version/revision, port count)
+        are compared; a serial-to-``device_id`` binding is deferred to the
+        real-device phase (plan D10).
+        """
+        if (
+            previous.protocol != fresh.protocol
+            or previous.firmware != fresh.firmware
+            or previous.hardware_version != fresh.hardware_version
+            or previous.hardware_revision != fresh.hardware_revision
+            or previous.num_ports != fresh.num_ports
+        ):
+            raise LibreVnaProtocolError(
+                "reconnected device identity differs from the session device",
+                previous_firmware=previous.firmware,
+                fresh_firmware=fresh.firmware,
+            )
+
+    @staticmethod
     def _compute_s_parameter(
         dp: VNADatapoint, *, stage: int, port_mask: int
     ) -> complex:
@@ -1182,3 +1373,4 @@ class LibreVnaUsbBackend(AcquisitionBackend):
         self._unexpected_acks = 0
         self._ignored_packets = 0
         self._sweep_timeout_s = self._settings.sweep_timeout_min_s
+        self._require_axis_verify = False

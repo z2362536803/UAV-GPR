@@ -121,7 +121,10 @@ def test_default_run_skips_hardware_marked_tests() -> None:
         ]
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 skipped" in result.stdout
+    # ISSUE-023 added 3 LibreVNA hardware tests: the hardware directory now
+    # holds 4 hardware-marked modules (sentinel + 3), all skipped without the
+    # double opt-in.
+    assert "4 skipped" in result.stdout
     assert "HARDWARE_SENTINEL_RAN" not in result.stdout
 
 
@@ -144,7 +147,7 @@ def test_hardware_double_optin_runs_marked_test() -> None:
     )
     # The env opt-in is missing, so even with --hardware the test must skip.
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 skipped" in result.stdout
+    assert "4 skipped" in result.stdout
     assert "HARDWARE_SENTINEL_RAN" not in result.stdout
 
 
@@ -188,7 +191,7 @@ def test_hardware_env_alone_is_not_authorization() -> None:
     )
     # Env alone (no --hardware) must still skip: env is not an authorization.
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 skipped" in result.stdout
+    assert "4 skipped" in result.stdout
     assert "HARDWARE_SENTINEL_RAN" not in result.stdout
 
 
