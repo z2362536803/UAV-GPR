@@ -78,7 +78,7 @@
 
 ## ISSUE-026：sweep midpoint GNSS 匹配器
 
-- 状态：Planned
+- 状态：Done（2026-09-02 独立复审 VERDICT=PASS 后经项目负责人授权合并，见 [docs/reports/ISSUE_026_REVIEW_REPORT.md](../reports/ISSUE_026_REVIEW_REPORT.md)；3 项 P3 已在合并前关闭）
 - 直接依赖：ISSUE-005、025
 - 映射：FR-006、014
 
