@@ -41,7 +41,7 @@
 
 ## ISSUE-025：GNSS reader、重连与有界 fix 缓存
 
-- 状态：Planned
+- 状态：Done（2026-09-02 独立复审 VERDICT=PASS 后经项目负责人授权合并，见 [docs/reports/ISSUE_025_REVIEW_REPORT.md](../reports/ISSUE_025_REVIEW_REPORT.md)；4 项 P3 由合并后小修批次关闭，见执行记录）
 - 直接依赖：ISSUE-005、024
 - 映射：FR-006、018
 
