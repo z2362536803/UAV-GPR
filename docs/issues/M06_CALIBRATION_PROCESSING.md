@@ -4,7 +4,7 @@
 
 ## ISSUE-027：OSL 校准模型与求解器
 
-- 状态：Planned
+- 状态：Done（2026-09-02 独立复审 VERDICT=PASS 后经项目负责人授权合并，见 [docs/reports/ISSUE_027_REVIEW_REPORT.md](../reports/ISSUE_027_REVIEW_REPORT.md)；3 项 P3 非阻塞挂账）
 - 直接依赖：ISSUE-001、004、007
 - 映射：FR-011、ADR-0005
 
