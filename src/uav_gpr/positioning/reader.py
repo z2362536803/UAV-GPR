@@ -136,8 +136,10 @@ class PyserialSerialConfig:
             raise ValueError("baudrate must be an int")
         if self.baudrate <= 0:
             raise ValueError("baudrate must be positive")
-        if not (0.0 <= self.read_timeout_s) or not math.isfinite(self.read_timeout_s):
-            raise ValueError("read_timeout_s must be a non-negative finite float")
+        if isinstance(self.read_timeout_s, bool) or (
+            self.read_timeout_s <= 0.0
+        ) or not math.isfinite(self.read_timeout_s):
+            raise ValueError("read_timeout_s must be a positive finite float")
 
 
 class _SerialPortLike(Protocol):
@@ -180,7 +182,14 @@ class PyserialSerialAdapter:
         if self._closed:
             return
         self._closed = True
-        self._port.close()
+        try:
+            self._port.close()
+        except Exception:
+            # Best-effort cleanup (P3, ISSUE-025 review §10): the adapter is
+            # already marked closed and the port handle is unusable either
+            # way; a failing close must never propagate into the reader's
+            # stop path.
+            pass
 
 
 class PyserialSerialFactory:
@@ -346,7 +355,6 @@ class GnssReader:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = False
-        self._stopped = False
 
         # Shared state, guarded by ``self._cond``.
         self._connected = False
@@ -382,8 +390,6 @@ class GnssReader:
                 raise RuntimeError(
                     "GnssReader already started; create a new reader after stop"
                 )
-            if self._stopped:
-                raise RuntimeError("GnssReader stopped; create a new reader")
             self._started = True
         self._thread = threading.Thread(target=self._run, name=self._name, daemon=True)
         self._thread.start()

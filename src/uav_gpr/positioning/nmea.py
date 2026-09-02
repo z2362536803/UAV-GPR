@@ -501,10 +501,12 @@ def _parse_latlon_pair(
     lat_raw: str, ns: str, lon_raw: str, ew: str
 ) -> tuple[float | None, float | None]:
     latitude = _parse_coordinate(
-        lat_raw, ns, "latitude", "latitude_hemisphere", _LAT_MAX_DEG, 4
+        lat_raw, ns, "latitude", "latitude_hemisphere", _LAT_MAX_DEG, 4,
+        allowed=("N", "S"),
     )
     longitude = _parse_coordinate(
-        lon_raw, ew, "longitude", "longitude_hemisphere", _LON_MAX_DEG, 5
+        lon_raw, ew, "longitude", "longitude_hemisphere", _LON_MAX_DEG, 5,
+        allowed=("E", "W"),
     )
     return latitude, longitude
 
@@ -516,6 +518,8 @@ def _parse_coordinate(
     hemi_field: str,
     max_abs: float,
     degree_digits: int,
+    *,
+    allowed: tuple[str, ...],
 ) -> float | None:
     if raw == "" and hemisphere == "":
         return None
@@ -535,6 +539,12 @@ def _parse_coordinate(
         raise NmeaError(
             NmeaErrorReason.MALFORMED_FIELD,
             "invalid hemisphere letter",
+            {"field": hemi_field, "got": hemisphere},
+        )
+    if hemisphere not in allowed:
+        raise NmeaError(
+            NmeaErrorReason.MALFORMED_FIELD,
+            "hemisphere letter does not match the coordinate axis",
             {"field": hemi_field, "got": hemisphere},
         )
     if not _COORD_RE.fullmatch(raw):

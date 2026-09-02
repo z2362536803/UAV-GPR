@@ -84,6 +84,8 @@ GGA_EMPTY_QUALITY = "$GPGGA,123519,4807.038,N,01131.000,E,,08,0.9,545.4,M,46.9,M
 GGA_QUALITY_MANUAL = "$GPGGA,123519,4807.038,N,01131.000,E,7,08,0.9,545.4,M,46.9,M,,*41"
 GGA_QUALITY1_NO_COORDS = "$GPGGA,123519,,,,,1,08,0.9,545.4,M,46.9,M,,*7E"
 GGA_HEMI_NO_COORDS = "$GPGGA,123519,,N,,E,1,08,0.9,545.4,M,46.9,M,,*75"
+GGA_LAT_HEMI_E = "$GPGGA,120000,4807.038,E,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*42"
+GGA_LON_HEMI_N = "$GPGGA,120000,4807.038,N,01131.000,N,1,08,0.9,545.4,M,46.9,M,,*42"
 GGA_QUALITY0_WITH_COORDS = "$GPGGA,123520,4807.038,N,01131.000,E,0,00,,,M,,M,,*58"
 
 RECEIVED_UTC = datetime(2026, 9, 2, 12, 35, 20, tzinfo=UTC)
@@ -322,6 +324,15 @@ class TestFieldSemantics:
 
     def test_hemisphere_without_coordinates_rejected(self) -> None:
         _expect_error(GGA_HEMI_NO_COORDS, NmeaErrorReason.MALFORMED_FIELD, "latitude_hemisphere")
+
+    def test_latitude_hemisphere_must_be_north_or_south(self) -> None:
+        # P3-1 (ISSUE-024 review §10): the hemisphere letter must match the
+        # coordinate axis — a latitude tagged "E" is malformed, not west.
+        _expect_error(GGA_LAT_HEMI_E, NmeaErrorReason.MALFORMED_FIELD, "latitude_hemisphere")
+
+    def test_longitude_hemisphere_must_be_east_or_west(self) -> None:
+        # P3-1: a longitude tagged "N" is malformed, not north.
+        _expect_error(GGA_LON_HEMI_N, NmeaErrorReason.MALFORMED_FIELD, "longitude_hemisphere")
 
 
 # ---------------------------------------------------------------------------

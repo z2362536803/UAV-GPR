@@ -613,8 +613,11 @@ def test_high_frequency_input_keeps_cache_bounded() -> None:
         adapter.feed(payload[chunk_start : chunk_start + chunk_size])
 
     with make_reader(ScriptedFactory(adapter), clock) as reader:
+        # Safety bound only: parsing 2000 sentences normally completes in
+        # <0.1 s; the generous bound avoids load-induced flakes in the full
+        # suite while staying event-driven (no fixed sleeps).
         assert reader.wait_for(
-            lambda s: s.metrics.gga_count == total, _READER_TIMEOUT_S
+            lambda s: s.metrics.gga_count == total, 30.0
         )
         status = reader.status()
         assert status.metrics.fixes_published == total
@@ -815,6 +818,24 @@ def test_pyserial_adapter_maps_port_errors() -> None:
         adapter.read(8)
 
 
+def test_pyserial_adapter_close_is_best_effort() -> None:
+    """P3 (ISSUE-025 review §10): a failing port close must not propagate —
+    the adapter is already marked closed and cleanup stays best-effort."""
+
+    class ExplodingClosePort:
+        def read(self, size: int = 1) -> bytes:
+            raise OSError("device gone")
+
+        def close(self) -> None:
+            raise OSError("close failed")
+
+    adapter = PyserialSerialAdapter(ExplodingClosePort())
+    adapter.close()  # must not raise
+    adapter.close()  # idempotent, still no raise
+    with pytest.raises(SerialAdapterClosedError):
+        adapter.read(8)
+
+
 def test_pyserial_config_validates_without_opening() -> None:
     config = PyserialSerialConfig(port="COM3")
     assert config.baudrate == 9600
@@ -825,6 +846,10 @@ def test_pyserial_config_validates_without_opening() -> None:
         PyserialSerialConfig(port="COM3", baudrate=0)
     with pytest.raises(ValueError):
         PyserialSerialConfig(port="COM3", read_timeout_s=-1.0)
+    with pytest.raises(ValueError):
+        # P3 (ISSUE-025 review §10): timeout 0 makes pyserial non-blocking,
+        # which would busy-spin the reader loop; require strictly positive.
+        PyserialSerialConfig(port="COM3", read_timeout_s=0.0)
     # The factory only opens a port when called; constructing it must not.
     assert callable(PyserialSerialFactory(config))
 

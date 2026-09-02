@@ -86,10 +86,10 @@ git diff --check && git status --porcelain=v1 -b
 |---|---|---|---|
 | 红灯（实现前） | `./.venv/Scripts/python.exe -m pytest tests/contract/test_gnss_reader.py -q` | 2 | `ModuleNotFoundError: No module named 'uav_gpr.positioning.reader'`，collection error——失败测试先行证据 |
 | 实现后首轮 | 同上 | 1 | 17 failed / 20 passed（85.6s）——发现 fake serial 缺陷：脚本适配器 `read` 按 `item[:max_bytes]` 截断并**丢弃余量**（真实串口 OS 缓冲会保留），>64 字节语句被截断无法成行；修复 fake 为 pending 缓冲排空语义（非产品代码缺陷，测试替身修复）；另修复 ruff UP035/B905 |
-| 绿灯 | `./.venv/Scripts/python.exe -m pytest tests/contract/test_gnss_reader.py -q` | 0 | **37 passed in 0.33s**（27 个测试函数，参数化展开 37 项；无固定 sleep，全部事件/Condition 驱动） |
-| 定向+依赖回归 | `./.venv/Scripts/python.exe -m pytest tests/contract/test_gnss_reader.py tests/contract/test_nmea.py tests/unit/test_core_gnss.py tests/unit/test_core_metadata.py -q` | 0 | **144 passed in 0.43s**（37 新增 + 60 nmea + 47 core gnss/metadata） |
-| 全量 pytest | `./.venv/Scripts/python.exe -m pytest -m "not hardware and not slow" -q` | 0 | **1011 passed, 4 deselected in 127.61s**（978→1015 collected；974 基线 + 37 新增，与预期一致） |
-| 全量门禁 | `./.venv/Scripts/python.exe tools/quality/verify.py` | 0 | pytest 1011/4 → ruff `All checks passed!` → mypy `Success: no issues found in 45 source files`（44→45 含 reader.py）→ `package import ok`；`[quality] all gates passed` |
+| 绿灯 | `./.venv/Scripts/python.exe -m pytest tests/contract/test_gnss_reader.py -q` | 0 | **39 passed in 0.33s**（29 个测试函数，参数化展开 39 项；无固定 sleep，全部事件/Condition 驱动；37→39 为裁决 3/4 修订新增 2 项） |
+| 定向+依赖回归 | `./.venv/Scripts/python.exe -m pytest tests/contract/test_gnss_reader.py tests/contract/test_nmea.py tests/unit/test_core_gnss.py tests/unit/test_core_metadata.py -q` | 0 | **146 passed in 0.43s**（39 新增 + 60 nmea + 47 core gnss/metadata） |
+| 全量 pytest | `./.venv/Scripts/python.exe -m pytest -m "not hardware and not slow" -q` | 0 | **1013 passed, 4 deselected in 127.61s**（978→1017 collected；974 基线 + 39 新增，与预期一致） |
+| 全量门禁 | `./.venv/Scripts/python.exe tools/quality/verify.py` | 0 | pytest 1013/4 → ruff `All checks passed!` → mypy `Success: no issues found in 45 source files`（44→45 含 reader.py）→ `package import ok`；`[quality] all gates passed` |
 | ruff 显式 | `./.venv/Scripts/python.exe -m ruff check src tests` | 0 | `All checks passed!` |
 | mypy 显式 | `./.venv/Scripts/python.exe -m mypy src` | 0 | `Success: no issues found in 45 source files` |
 | import | `./.venv/Scripts/python.exe -c "import uav_gpr; from uav_gpr.positioning.reader import GnssReader; ..."` | 0 | `import ok` |
@@ -99,7 +99,7 @@ git diff --check && git status --porcelain=v1 -b
 
 1. 首轮绿灯失败根因是**测试替身**（ScriptedSerialAdapter 截断丢弃余量），非 reader.py 缺陷；修复方式为把 fake 的 read 语义对齐真实串口缓冲（pending 字节缓冲跨 read 保留），并同步把参数化拆行测试的 reader `read_chunk_size` 对齐喂入分块（1/2/7/4096 字节逐次读取，强化跨 read 边界拼行验证）。产品代码未因此改动。
 2. 实现内部自检修正（均在红灯后、绿灯前完成，属最小实现的一次成型迭代）：`__init__` 中 `_status` 初始化顺序、移除未用 import、`read` I/O 错误重连路径补退避等待（防连续 I/O 错误紧密循环，GNSS.md §3「连续 I/O 错误触发有退避的重连」）、`import serial` 仅保留 `import-untyped` ignore（45 文件 mypy strict 实测通过）。
-3. 门禁基线推进：974 → **1011 passed / 4 deselected**（+37）；mypy 44 → **45 文件**；ruff/mypy/import 全绿；工作树仅含 inScope 4 路径 + t1 基线单，无缓存/日志/实测数据残留（`.pytest_cache` 等 git-ignored）。
+3. 门禁基线推进：974 → 1011（裁决修订前登记时点）→ **1013 passed / 4 deselected**（裁决 3/4 修订后终态，见 §11）；mypy 44 → **45 文件**；ruff/mypy/import 全绿；工作树仅含 inScope 4 路径 + t1 基线单，无缓存/日志/实测数据残留（`.pytest_cache` 等 git-ignored）。
 
 ## 11. captain 裁决修订记录（2026-09-02，完成登记后到达）
 
@@ -115,3 +115,18 @@ captain 对 t1 提出的 5 个决策点作出裁决（单模块 ✓、测试落�
 - 修订红灯：改签名+验证后跑定向 → `28 failed, 9 passed in 0.46s`，exit 1（make_reader 旧配置 `rmc_pair_window_s=10.0` 触发新验证 ValueError——失败测试先行证据）。
 - 修订绿灯：make_reader 窗口改 2.0、原 11s 过龄 RMC 测试改为 2.5s、新增「恰好 2.0s 边界仍配对」与「必填阈值验证（TypeError/ValueError）」两测试 → **39 passed in 0.33s，exit 0**（34→36 测试函数，参数化后 37→39 用例）。
 - 全量门禁复跑数字见下表更新行。
+
+## 12. 合并后 P3 关闭批次（captain 实施，2026-09-02，项目负责人授权）
+
+ISSUE-025 合并（`9f98cca`）后按复审报告 §10 与 ISSUE-024 复审 §10 关闭全部 P3（单独提交，不并入 Issue 功能提交）：
+
+| 项 | 修复 | 证据 |
+|---|---|---|
+| ISSUE-024 P3-1（nmea.py 半球按轴校验） | `_parse_coordinate` 增 `allowed` 参数：纬度仅 N/S、经度仅 E/W；错轴半球 → `MALFORMED_FIELD`（"hemisphere letter does not match the coordinate axis"） | 新测试 `test_latitude_hemisphere_must_be_north_or_south` / `test_longitude_hemisphere_must_be_east_or_west`（GGA_LAT_HEMI_E/GGA_LON_HEMI_N，checksum 独立预计算 *42） |
+| ISSUE-025 P3-1（reader.py `_stopped` 死状态） | 删除冗余 `_stopped` 字段与其守卫（`_started` 已覆盖重启拒绝语义，行为等价） | 既有 `start-after-stop`/`double-start` 测试保持通过 |
+| ISSUE-025 P3-2（`read_timeout_s=0` 空转） | `PyserialSerialConfig` 校验收紧：必须为正有限 float（0 会使 pyserial 非阻塞 → reader 忙转） | 新断言：`read_timeout_s=0.0` → ValueError |
+| ISSUE-025 P3-3（计划 §10 表数字） | §10 门禁表与偏差记录更新为裁决修订后终态（39/146/1013） | 见上表 |
+| ISSUE-025 P3-4（adapter close 无兜底） | `PyserialSerialAdapter.close()` best-effort：已置 closed，port.close() 异常吞入注释化兜底（不传播进 stop 路径） | 新测试 `test_pyserial_adapter_close_is_best_effort`（ExplodingClosePort：close 不抛、幂等、closed 后 read 拒） |
+| 负载 flake（全量跑 23min 异常期间 `test_high_frequency_input_keeps_cache_bounded` 超 5s 安全界） | 该测试等待安全界放宽至 30s（注释说明仅安全界、事件驱动不变；单测隔离 0.09s 稳定） | 全量复跑通过 |
+
+**门禁（批次后终态）**：全量 verify.py exit 0 = **1016 passed / 4 deselected in 276.02s**（含 4 个新测试）；ruff/mypy(45 files)/import 全绿；`git diff --check` clean。改动文件：`src/uav_gpr/positioning/nmea.py`、`tests/contract/test_nmea.py`、`src/uav_gpr/positioning/reader.py`、`tests/contract/test_gnss_reader.py`、本计划文档。
