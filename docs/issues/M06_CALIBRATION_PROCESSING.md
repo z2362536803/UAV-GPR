@@ -41,7 +41,7 @@
 
 ## ISSUE-028：OSL/空采无 UI 参考采集服务
 
-- 状态：Planned
+- 状态：Done（2026-09-02 团队复审 VERDICT=PASS + 第二意见独立复审 5 项发现全部关闭后经项目负责人授权合并，见 [docs/reports/ISSUE_028_REVIEW_REPORT.md](../reports/ISSUE_028_REVIEW_REPORT.md)；修复批次见计划 §7 修复 8-12）
 - 直接依赖：ISSUE-015、027
 - 映射：FR-011、018
 
