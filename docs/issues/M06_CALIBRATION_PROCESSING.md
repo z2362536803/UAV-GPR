@@ -78,7 +78,7 @@
 
 ## ISSUE-029：`.rcal/.rcbg`、兼容性与质量报告
 
-- 状态：Planned
+- 状态：Done（2026-09-05 自动化轮：t3 复审 PASS WITH CONDITIONS + F1(P2) 修复闭合（t4，captain 接管）并经 reviewer 定向复验 F1 CLOSED 后自动合并，见 [docs/reports/ISSUE_029_REVIEW_REPORT.md](../reports/ISSUE_029_REVIEW_REPORT.md)；P3 F2-F5 挂账）
 - 直接依赖：ISSUE-011、027、028
 - 映射：FR-011
 
