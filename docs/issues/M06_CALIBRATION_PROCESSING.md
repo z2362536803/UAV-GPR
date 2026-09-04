@@ -115,7 +115,7 @@
 
 ## ISSUE-030：ProcessingStage 框架与频域带通
 
-- 状态：Planned
+- 状态：Done（2026-09-05 自动化轮：t3 复审 VERDICT=PASS（无 P0/P1/P2）后自动合并，见 [docs/reports/ISSUE_030_REVIEW_REPORT.md](../reports/ISSUE_030_REVIEW_REPORT.md)；4 项 P3 挂账）
 - 直接依赖：ISSUE-001、004、007
 - 映射：FR-012
 
