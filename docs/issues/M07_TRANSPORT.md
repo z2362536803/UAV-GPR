@@ -4,7 +4,7 @@
 
 ## ISSUE-037：协议 ADR、消息模型与二进制 framing
 
-- 状态：Planned
+- 状态：Done（2026-09-05 自动化轮：t3 复审 needs_revision（P2-1 trace 域错误逃逸）→ t4 repair 闭合 P2-1+P3×3 → t5 round-2 VERDICT=PASS 后自动合并；ADR-0006 转 Accepted。变更全集=5 inScope+测试文件+计划日志（t4 登记口径差异已在 t5 复审核验），见 [docs/reports/ISSUE_037_REVIEW_REPORT.md](../reports/ISSUE_037_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-003、005、006、009
 - 映射：FR-001、002、008、009
 
