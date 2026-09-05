@@ -337,7 +337,7 @@
 
 ## ISSUE-036：完整处理编排、revision 与安全回放
 
-- 状态：Planned
+- 状态：Done（2026-09-05 自动化轮：t3 复审 PASS WITH CONDITIONS → t4 repair 闭合 F1-F5 → t5 round-2 VERDICT=PASS 后自动合并，见 [docs/reports/ISSUE_036_REVIEW_REPORT.md](../reports/ISSUE_036_REVIEW_REPORT.md)；剩余风险：011 reader 默认 time_points 口径 vs IFFT 宽网格互斥——D6(b) ADR+冻结 schema 变更为 M06 收尾后第一条 ADR 议题）
 - 直接依赖：ISSUE-011、018、029～035
 - 映射：FR-011、012、016
 
