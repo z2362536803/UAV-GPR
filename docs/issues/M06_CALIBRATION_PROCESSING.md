@@ -263,7 +263,7 @@
 
 ## ISSUE-034：Dewow 时域阶段
 
-- 状态：Planned
+- 状态：Done（2026-09-05 自动化轮：t3 复审 VERDICT=PASS（无 P0/P1/P2，2 项 P3 挂账）后自动合并，见 [docs/reports/ISSUE_034_REVIEW_REPORT.md](../reports/ISSUE_034_REVIEW_REPORT.md)）
 - 直接依赖：ISSUE-030、031
 - 映射：FR-012
 
